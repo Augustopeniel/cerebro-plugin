@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "cerebro": {
+      "type": "http",
+      "url": "https://cerebro.ogidoc.com/mcp/eu",
+      "headers": {
+        "X-Cerebro-Plugin": "2.0"
+      }
+    }
+  }
+}

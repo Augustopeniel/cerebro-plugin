@@ -1,0 +1,8 @@
+{
+  "name": "cerebro",
+  "version": "2.0.0",
+  "description": "Conecta o Claude ao seu cérebro (Cérebro Vivo): memória em camadas, decisões, aprendizados e fechamento de etapa, com os comandos /cerebro:*. Login pelo próprio Claude (OAuth), sem token.",
+  "author": {
+    "name": "Augusto Peniel"
+  }
+}

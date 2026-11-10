@@ -1,0 +1,39 @@
+---
+name: instalar
+description: Prepara este Claude para o cérebro — inventário do que já existe (outras memórias e integrações, com a escolha de importar, conviver ou desligar), bloco de regras no CLAUDE.md global, memória automática e leituras, tudo com backup e o ok do usuário. Rodar de novo atualiza o bloco.
+disable-model-invocation: true
+---
+Prepare este Claude para usar o cérebro. Fale com o usuário no idioma dele. **Nada muda sem o ok do usuário, item por item, e nada é apagado.**
+
+1. **Diagnóstico.** Rode `cerebro-plugin diagnostico` e chame `load_context` do MCP `cerebro`. Mostre o resultado em poucas linhas.
+   - Se o servidor pedir login, explique: `/mcp` → `plugin:cerebro:cerebro` → Authenticate. O navegador abre o portal (login, código do autenticador, escolha do cérebro) e volta sozinho. Depois, rode `/cerebro:instalar` de novo e pare aqui.
+2. **Inventário do que já existe.** Rode `cerebro-plugin inventario`. Ele lista só nomes, sem valores.
+   - Nunca abra por inteiro o `~/.claude.json` nem arquivos `.env`: eles guardam tokens de outros servidores.
+   - Some ao que o comando mostrou o `CLAUDE.md` do projeto atual, que já está no seu contexto.
+   - Mostre ao usuário o que pode competir com o cérebro, por exemplo:
+     - regras de memória ou imports (`@…`) no CLAUDE.md;
+     - memória automática ligada, ou com arquivos;
+     - servidores MCP e plugins de memória ou notas (Obsidian, Notion, mem0, "memory"…);
+     - hooks que põem contexto no início da sessão;
+     - comandos e skills de memória.
+   - Para **cada** item parecido, ofereça três caminhos e peça a escolha:
+     - **Importar para o cérebro:** você lê o conteúdo e grava no cérebro com as ferramentas de gravação, no formato dele (`create_note`, `record_decision`, `record_learning`…), em lotes, mostrando antes a lista do que vai virar o quê. O original fica intacto. Se for grande (um vault inteiro, um workspace do Notion), proponha um plano à parte em vez de importar agora.
+     - **Conviver:** os dois ficam. O cérebro é a memória principal, e o outro vira fonte de consulta. Registre a escolha no cérebro com `record_decision` (o que é o outro sistema, para que continua servindo, quem prevalece em conflito). Assim o próximo Claude sabe.
+     - **Desligar:** só o que for reversível (tirar do `enabledPlugins`, comentar ou tirar a linha do CLAUDE.md), com o backup do passo 4. Nunca apague arquivos de memória ou notas.
+   - Nada parecido encontrado: diga em uma linha e siga.
+3. **Mostre o que vai mudar** e peça o ok de cada item:
+   a) **Bloco do cérebro no CLAUDE.md global.** Mostre o texto de `${CLAUDE_PLUGIN_ROOT}/bloco.md`. Ele entra entre os marcadores `<!-- cerebro:inicio … -->` e `<!-- cerebro:fim -->`; nada fora deles é tocado.
+   b) **Memória automática do Claude Code desligada** (`"autoMemoryEnabled": false` no `settings.json` do usuário). Motivo: a memória passa a ser o cérebro, e duas memórias se contradizem. Se o usuário escolheu conviver com a memória automática no passo 2, não proponha este item.
+   c) **Leituras do cérebro sem pedir permissão a cada vez.** Entram em `permissions.allow` do `settings.json` só estas ferramentas:
+      `mcp__plugin_cerebro_cerebro__load_context`, `mcp__plugin_cerebro_cerebro__read_index`, `mcp__plugin_cerebro_cerebro__read_note`, `mcp__plugin_cerebro_cerebro__search`, `mcp__plugin_cerebro_cerebro__guia`, `mcp__plugin_cerebro_cerebro__session_status`, `mcp__plugin_cerebro_cerebro__note_history` e `mcp__plugin_cerebro_cerebro__recent_changes`.
+4. **Aplique só o que foi aprovado (passos 2 e 3):**
+   - antes de mexer no `settings.json` ou no CLAUDE.md fora do bloco, rode `cerebro-plugin backup "${CLAUDE_PLUGIN_DATA}"` e guarde a pasta que ele imprime;
+   - a) `cerebro-plugin instalar-bloco "${CLAUDE_PLUGIN_DATA}"`, que faz o próprio backup e troca só o bloco;
+   - b), c) e o que for desligar: edite o `settings.json` do usuário (`~/.claude/settings.json`, ou o da pasta em `CLAUDE_CONFIG_DIR`). Preserve todo o resto, mantenha o JSON válido e não duplique entradas. O Claude Code pede a aprovação do usuário para editar esse arquivo: explique antes que o pedido vai aparecer;
+   - importações e decisões de convivência: com as ferramentas do cérebro, como combinado no passo 2.
+5. **Confira:** rode o diagnóstico de novo.
+6. **Termine** com, por item:
+   - o que foi aplicado, importado, mantido em convivência ou recusado;
+   - onde ficou o backup.
+
+   Avise que o efeito completo vale a partir da próxima sessão e que `/cerebro:desinstalar` desfaz o bloco e as configurações. Se gravou algo no cérebro (importações e decisões), chame `close_session` (resumo: "instalação do plugin") e termine com o texto do campo `fechamento`; se não gravou nada, termine com `CEREBRO: nada gravado` e `🟢 Ponto de parada seguro`.

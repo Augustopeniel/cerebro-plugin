@@ -1,0 +1,14 @@
+{
+  "name": "cerebro-vivo",
+  "owner": {
+    "name": "Augusto Peniel"
+  },
+  "description": "Plugin do Cérebro Vivo: conecta o Claude ao cérebro, com os comandos /cerebro:*.",
+  "plugins": [
+    {
+      "name": "cerebro",
+      "source": "./cerebro",
+      "description": "Conecta o Claude ao seu cérebro (Cérebro Vivo), com os comandos /cerebro:*."
+    }
+  ]
+}
