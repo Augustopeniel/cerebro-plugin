@@ -4,7 +4,15 @@
       "type": "http",
       "url": "https://cerebro.ogidoc.com/mcp/eu",
       "headers": {
-        "X-Cerebro-Plugin": "2.0"
+        "X-Cerebro-Plugin": "2.2"
+      }
+    },
+    "cofre": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}/broker", "cerebro-cofre", "mcp"],
+      "env": {
+        "CEREBRO_URL": "https://cerebro.ogidoc.com"
       }
     }
   }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Plugin `cerebro` (contrato 2.0): início de sessão, bloco do CLAUDE.md global, inventário e
+# Plugin `cerebro` (contrato 2.2): início de sessão, bloco do CLAUDE.md global, inventário e
 # diagnóstico. Não fala com o servidor: o login é o OAuth do próprio Claude (o hook não tem o
 # token), e a carga do cérebro vem pela 1ª ferramenta, `load_context`.
 #
@@ -9,7 +9,7 @@
 #   cerebro-plugin instalar-bloco <pasta-dados> | desinstalar-bloco <pasta-dados> | backup <pasta-dados>
 set -u
 
-CONTRATO="2.0"  # versão do contrato que este plugin conhece (cerebro.core.contract)
+CONTRATO="2.2"  # versão do contrato que este plugin conhece (cerebro.core.contract)
 INICIO="<!-- cerebro:inicio v"
 FIM="<!-- cerebro:fim -->"
 RAIZ="$(cd "$(dirname "$0")/.." && pwd)"

@@ -10,5 +10,5 @@ Identifique esta máquina (macOS = mac, Windows = windows). Fale com o usuário 
 3. **Fechar cada item:**
    - `update_fields(item, {'status': 'aplicado', 'aplicado_em': '<hoje>'})`;
    - `append_dated(item, 'Aplicação', '<máquina>: <resultado da conferência>')`;
-   - `update_section` na Fila de `_sincronia` e na linha do `_index`.
+   - `update_section` na Fila de `_sincronia` e na linha do `_index`, com a `base_version` da leitura.
 4. Sem pendências: diga em 1 linha.
