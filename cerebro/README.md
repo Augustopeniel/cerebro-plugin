@@ -2,17 +2,13 @@
 
 Conecta o Claude ao seu cérebro (Cérebro Vivo). Sem token: o login é feito pelo próprio Claude (OAuth), com a sua conta do portal.
 
-## Requisito: `uv`
-O plugin passa a exigir o [`uv`](https://docs.astral.sh/uv/) no PATH: ele roda o broker local do cofre (o MCP `cofre`) e o hook que protege o Bash. Instale uma vez (macOS: `brew install uv`; Windows: `winget install astral-sh.uv`) e reinicie o Claude. Sem o `uv`, a memória funciona, mas o cofre não.
+## Nada a instalar antes
+O plugin começa tudo sozinho, em macOS, Windows e Linux, no app desktop ou no terminal. O lançador `cerebro-plugin` é um binário nativo, compilado de `launcher/` (Go, só a biblioteca padrão) com compilação reprodutível. Os ganchos rodam sem shell. Na 1ª abertura, o cofre baixa uma cópia fixa do [`uv`](https://docs.astral.sh/uv/), conferida pelo SHA-256 gravado no lançador, e o uv baixa o Python e as bibliotecas do broker. Tudo fica na pasta de dados do plugin, uns 120 MB, nada no sistema nem no PATH. Também na 1ª abertura, o plugin prepara este Claude sozinho, com backup: o bloco no CLAUDE.md global, as leituras do cérebro liberadas e a atualização automática.
 
 ## Instalar (Claude Code)
-1. No portal (https://cerebro.ogidoc.com), em Meus cérebros, clique em **Vincular com o Claude**. O Claude Code abre com o comando pronto; aperte Enter. Ou cole no Claude Code:
-   ```
-   /plugin install cerebro --marketplace Augustopeniel/cerebro-plugin
-   ```
-   (Claude Code anterior à 2.1.275: `/plugin marketplace add Augustopeniel/cerebro-plugin` e depois `/plugin install cerebro@cerebro-vivo`.)
-2. Na primeira sessão, o Claude avisa que o cérebro precisa de login: `/mcp` → `plugin:cerebro:cerebro` → **Authenticate**. O navegador abre o portal, onde você entra, confirma com o código do autenticador e escolhe o cérebro. Depois ele volta sozinho.
-3. Rode `/cerebro:instalar`. Ele prepara este Claude com backup e o seu ok, item por item.
+1. No portal (https://cerebro.ogidoc.com), em Meus cérebros, clique em **Vincular com o Claude** e copie o pedido. Cole numa conversa do Claude Code (app desktop ou terminal): o próprio Claude instala o plugin (`claude plugin marketplace add Augustopeniel/cerebro-plugin` e `claude plugin install cerebro@cerebro-vivo`) e abre o login (`claude mcp login plugin:cerebro:cerebro`).
+2. O navegador abre o portal, onde você entra, confirma com o código do autenticador e escolhe o cérebro. Depois ele volta sozinho.
+3. Reinicie o Claude. Na abertura seguinte, o plugin se prepara sozinho, com backup. `/cerebro:instalar` revisa o que pode competir com o cérebro (outras memórias, plugins de notas).
 
 ## claude.ai (web, desktop e celular)
 Customize → Connectors → **Add custom connector** → endereço `https://cerebro.ogidoc.com/mcp/eu`. O login é o mesmo.

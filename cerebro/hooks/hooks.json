@@ -4,15 +4,25 @@
       {
         "matcher": "startup|resume|clear|compact",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/cerebro-plugin\" sessao", "timeout": 30 }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/cerebro-plugin",
+            "args": ["sessao", "${CLAUDE_PLUGIN_DATA}"],
+            "timeout": 30
+          }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
-          { "type": "command", "command": "uv run --no-project --quiet python \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_guard.py\"", "timeout": 15 }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/cerebro-plugin",
+            "args": ["guarda"],
+            "timeout": 15
+          }
         ]
       }
     ]

@@ -1,9 +1,9 @@
 ---
 name: instalar
-description: Prepara este Claude para o cérebro — inventário do que já existe (outras memórias e integrações, com a escolha de importar, conviver ou desligar), bloco de regras no CLAUDE.md global, memória automática e leituras, tudo com backup e o ok do usuário. Rodar de novo atualiza o bloco.
+description: Revisa a preparação deste Claude para o cérebro — o início de sessão já aplica sozinho, com backup, o bloco do CLAUDE.md, as leituras liberadas e a atualização automática; aqui fica o inventário do que pode competir com o cérebro (importar, conviver ou desligar) e a memória automática, com o ok do usuário. Rodar de novo atualiza o bloco.
 disable-model-invocation: true
 ---
-Prepare este Claude para usar o cérebro. Fale com o usuário no idioma dele. **Nada muda sem o ok do usuário, item por item, e nada é apagado.**
+Prepare este Claude para usar o cérebro. Fale com o usuário no idioma dele. O início de sessão do plugin já aplicou sozinho, com backup em `${CLAUDE_PLUGIN_DATA}/backup`, o que é seguro e reversível: os itens a), c) e d) do passo 3. **O resto não muda sem o ok do usuário, item por item, e nada é apagado.** O plugin não depende de nada instalado antes (nem `uv`, nem Python, nem shell): o lançador `cerebro-plugin` é nativo e o cofre baixa sozinho o que usa.
 
 1. **Diagnóstico.** Rode `cerebro-plugin diagnostico` e chame `load_context` do MCP `cerebro`. Mostre o resultado em poucas linhas.
    - Se o servidor pedir login, explique: `/mcp` → `plugin:cerebro:cerebro` → Authenticate. O navegador abre o portal (login, código do autenticador, escolha do cérebro) e volta sozinho. Depois, rode `/cerebro:instalar` de novo e pare aqui.
@@ -21,7 +21,7 @@ Prepare este Claude para usar o cérebro. Fale com o usuário no idioma dele. **
      - **Conviver:** os dois ficam. O cérebro é a memória principal, e o outro vira fonte de consulta. Registre a escolha no cérebro com `record_decision` (o que é o outro sistema, para que continua servindo, quem prevalece em conflito). Assim o próximo Claude sabe.
      - **Desligar:** só o que for reversível (tirar do `enabledPlugins`, comentar ou tirar a linha do CLAUDE.md), com o backup do passo 4. Nunca apague arquivos de memória ou notas.
    - Nada parecido encontrado: diga em uma linha e siga.
-3. **Mostre o que vai mudar** e peça o ok de cada item:
+3. **Mostre o estado de cada item.** a), c) e d) normalmente já estão aplicados (confira no `settings.json` e no diagnóstico): diga em uma linha. Peça o ok só do que faltar:
    a) **Bloco do cérebro no CLAUDE.md global.** Mostre o texto de `${CLAUDE_PLUGIN_ROOT}/bloco.md`. Ele entra entre os marcadores `<!-- cerebro:inicio … -->` e `<!-- cerebro:fim -->`; nada fora deles é tocado.
    b) **Memória automática do Claude Code desligada** (`"autoMemoryEnabled": false` no `settings.json` do usuário). Motivo: a memória passa a ser o cérebro, e duas memórias se contradizem. Se o usuário escolheu conviver com a memória automática no passo 2, não proponha este item.
    c) **Leituras do cérebro sem pedir permissão a cada vez.** Entram em `permissions.allow` do `settings.json` só estas ferramentas:

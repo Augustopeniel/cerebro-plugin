@@ -26,7 +26,7 @@ O cofre guarda as credenciais no servidor do cérebro, cifradas. O valor só sai
 - O papel **usa** quer dizer que o aparelho da pessoa recebe o valor para usá-lo: o cofre protege o valor do Claude e de quem não tem acesso, não de quem recebeu. Lembre o usuário disso antes de compartilhar.
 
 ## Primeira vez neste aparelho
-1. `status` do MCP `cofre`. Se o MCP `cofre` não estiver disponível, provavelmente falta o `uv`: peça para instalar (https://docs.astral.sh/uv/) e reiniciar o Claude.
+1. `status` do MCP `cofre`. Na 1ª abertura num aparelho, o plugin baixa sozinho o que o cofre usa (uv e Python, uns 120 MB, só na pasta do plugin; nada é instalado no sistema): se o MCP `cofre` aparecer como falho, rode `cerebro-plugin diagnostico`, espere o "cofre local: pronto" e reconecte em `/mcp`. Sem internet para baixar, rode `cerebro-plugin preparar` quando houver.
 2. **Vincular:** `pair` (ou a janela, aba Aparelho). O código e as impressões das chaves aparecem só na tela do usuário (você não recebe o código: não o peça). O navegador abre o portal; o usuário entra, confirma com o autenticador, confere se as impressões são as mesmas do portal e aprova. O `pair` espera a aprovação.
 3. **Configurar:** abra a janela (`open_window`), aba Configurar. O usuário cria a senha do cofre (duas vezes, mínimo 12 caracteres). O kit de recuperação aparece uma vez: ele guarda longe do Claude e marca "guardei o kit". Você não pede nem vê o kit.
 4. **Destravar:** `unlock` (popups da senha e do código) ou a janela. Tranca sozinho com 3 h sem uso ou ao fechar o Claude; `lock` tranca na hora.

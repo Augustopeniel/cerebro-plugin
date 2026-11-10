@@ -9,10 +9,14 @@
     },
     "cofre": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}/broker", "cerebro-cofre", "mcp"],
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/cerebro-plugin",
+      "args": [
+        "cofre",
+        "mcp"
+      ],
       "env": {
-        "CEREBRO_URL": "https://cerebro.ogidoc.com"
+        "CEREBRO_URL": "https://cerebro.ogidoc.com",
+        "CLAUDE_PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}"
       }
     }
   }
