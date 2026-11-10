@@ -81,6 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
     mig.add_argument("--old-broker", default=M.DEFAULT_OLD_BROKER)
     mig.add_argument("--scope", default="*", help="cérebros, separados por vírgula ('*' = todos)")
     mig.add_argument("--confirm", default="sempre", choices=("sempre", "sessao", "livre"))
+    mig.add_argument(
+        "--confirm-mcp",
+        default="sessao",
+        choices=("sempre", "sessao", "livre"),
+        help="confirmação das credenciais que os MCPs buscam (destino mcp:)",
+    )
     return parser
 
 

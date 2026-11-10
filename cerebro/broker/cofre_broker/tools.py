@@ -15,6 +15,7 @@ import datetime as dt
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -356,9 +357,11 @@ def t_pair(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
             f"{started.get('device')}). Para vincular de novo, chame com force=true."
         )
     # o código, o link (que leva o código) e as impressões vão só para a tela da pessoa
-    if started.get("new"):
-        broker.ui.open_url(started["link"])
+    # o aviso primeiro e o navegador depois: aberto antes, o navegador cobria o aviso
     broker.ui.show_info("Cofre do cérebro — vincular aparelho", broker.pairing_message(started))
+    if started.get("new"):
+        time.sleep(1.5)
+        broker.ui.open_url(started["link"])
     wait = args.get("wait")
     state = broker.pair_wait(max(0, min(int(300 if wait is None else wait), 600)))
     if state == "aprovado":

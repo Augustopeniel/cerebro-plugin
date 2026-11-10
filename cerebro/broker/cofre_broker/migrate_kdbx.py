@@ -25,7 +25,8 @@ from typing import Any, Protocol
 ARCHIVE_GROUP = "Arquivo"
 _SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _TOKEN_HINT = re.compile(r"(TOKEN|API_?KEY|_KEY$|SECRET|BEARER)", re.IGNORECASE)
-_SSH_HINT = re.compile(r"(SSH|_PEM$|PRIVATE_KEY|ID_RSA|ID_ED25519)", re.IGNORECASE)
+# tipo `ssh` é só chave privada (servidor SSH); `SSH_PASS` é senha que um MCP usa
+_SSH_HINT = re.compile(r"(SSH_KEY$|_PEM$|PRIVATE_KEY|ID_RSA|ID_ED25519)", re.IGNORECASE)
 
 
 class OldBackend(Protocol):
@@ -34,6 +35,12 @@ class OldBackend(Protocol):
     def list_meta(self, master: str) -> list[dict[str, str]]: ...
 
     def get_secret(self, master: str, ref: str) -> str: ...
+
+
+def confirmation_for(item: Planned, default: str = "sempre", for_mcp: str = "sessao") -> str:
+    """Quem os MCPs locais buscam ao subir (destino `mcp:`) confirma uma vez por destrave e
+    destino; o resto, a cada uso (decisão do Augusto em 2026-11-10)."""
+    return for_mcp if any(d["via"] == "mcp" for d in item.destinations) else default
 
 
 @dataclass
@@ -54,6 +61,7 @@ class Planned:
             "arquivada": self.archived,
             "usuario": self.fields.get("usuario", ""),
             "url": self.fields.get("url", ""),
+            "confirmacao": confirmation_for(self),
         }  # sem valor e sem notas
 
 
@@ -286,7 +294,7 @@ def main_cli(args: Any) -> int:
             fields=item.fields,
             scope=scope,
             destinations=item.destinations,
-            confirm=args.confirm,
+            confirm=confirmation_for(item, args.confirm, args.confirm_mcp),
         )
 
     done = apply(backend, master, migration, store=store, archive=client.archive)

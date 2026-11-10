@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import webbrowser
 
 from . import config as C
@@ -98,24 +99,29 @@ def _run(
 
 # ---------------------------------------------------------------- macOS -----
 
+# O texto do diálogo chega pelo ambiente (nunca por argv) e é lido por `do shell script`:
+# `system attribute` decodifica como MacRoman e estraga os acentos ("c√©rebro").
 _OSA_PROMPT = (
-    'set t to system attribute "COFRE_DLG_TITLE"\n'
-    'set m to system attribute "COFRE_DLG_MSG"\n'
+    "activate\n"
+    'set t to (do shell script "printf %s \\"$COFRE_DLG_TITLE\\"" without altering line endings)\n'
+    'set m to (do shell script "printf %s \\"$COFRE_DLG_MSG\\"" without altering line endings)\n'
     'set r to display dialog m with title t default answer "" '
     'with hidden answer buttons {"Cancelar", "OK"} '
     'default button "OK" cancel button "Cancelar"\n'
     "return text returned of r\n"
 )
 _OSA_CONFIRM = (
-    'set t to system attribute "COFRE_DLG_TITLE"\n'
-    'set m to system attribute "COFRE_DLG_MSG"\n'
+    "activate\n"
+    'set t to (do shell script "printf %s \\"$COFRE_DLG_TITLE\\"" without altering line endings)\n'
+    'set m to (do shell script "printf %s \\"$COFRE_DLG_MSG\\"" without altering line endings)\n'
     'display dialog m with title t buttons {"Cancelar", "OK"} '
     'default button "OK" cancel button "Cancelar"\n'
     'return "OK"\n'
 )
 _OSA_INFO = (
-    'set t to system attribute "COFRE_DLG_TITLE"\n'
-    'set m to system attribute "COFRE_DLG_MSG"\n'
+    "activate\n"
+    'set t to (do shell script "printf %s \\"$COFRE_DLG_TITLE\\"" without altering line endings)\n'
+    'set m to (do shell script "printf %s \\"$COFRE_DLG_MSG\\"" without altering line endings)\n'
     'display dialog m with title t buttons {"OK"} default button "OK" giving up after 600\n'
 )
 # JavaScript (JXA) porque lê o valor do stdin: nada de argv nem de ambiente. A pausa deixa o foco
@@ -289,7 +295,11 @@ def _win_type(text: str, deny: frozenset[str] = TYPING_DENYLIST) -> None:
 
 
 def _dialog_env(title: str, message: str) -> dict[str, str]:
-    return {"COFRE_DLG_TITLE": title, "COFRE_DLG_MSG": message}
+    # NFC: caminhos do macOS vêm com acento decomposto ("Financ¸as" no diálogo)
+    return {
+        "COFRE_DLG_TITLE": unicodedata.normalize("NFC", title),
+        "COFRE_DLG_MSG": unicodedata.normalize("NFC", message),
+    }
 
 
 def prompt_secret(title: str, message: str) -> str | None:
