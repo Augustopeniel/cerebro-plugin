@@ -364,6 +364,17 @@ class Broker:
         self.review_pending()
         return {"unlocked": True}
 
+    def _relocking(self, call: Callable[[], Any]) -> Any:
+        """Roda `call`; se o servidor disser que a sessão acabou (portal reiniciado, 3 h sem uso),
+        destrava de novo (senha + código) e tenta uma vez."""
+        try:
+            return call()
+        except VaultClientError as exc:
+            if exc.status != 401 or self.client().session is not None:
+                raise
+        self.unlock()
+        return call()
+
     def trusted(self) -> bool:
         """A sessão atual já passou pelo código do autenticador (autenticou uma vez)."""
         client = self._client
@@ -714,7 +725,7 @@ class Broker:
         if not client.session:
             self.unlock()
         if self.trusted():
-            self._authorize(wanted, via, target, head, force=force)
+            self._relocking(lambda: self._authorize(wanted, via, target, head, force=force))
             force = False
         confirmed: set[int] = set()
         if force:
@@ -794,7 +805,7 @@ class Broker:
     def _group_entries(self, group: str) -> dict[str, str]:
         """{NOME: caminho} das entradas diretas do grupo (o nome é o da variável)."""
         found = {}
-        for entry in self.client().list(group=group):
+        for entry in self._relocking(lambda: self.client().list(group=group)):
             path = str(entry["caminho"])
             if not path.lower().startswith(group.lower() + "/"):
                 continue
