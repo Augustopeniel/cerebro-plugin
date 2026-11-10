@@ -127,8 +127,8 @@ def t_status(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
 def t_unlock(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     broker.unlock()
     return (
-        "cofre destravado neste aparelho (a senha entrou pelo popup; eu não a vi). Tranca "
-        "sozinho depois de 2 h sem uso."
+        "cofre destravado neste aparelho (senha e código entraram pelos popups; eu não os vi). "
+        "Tranca sozinho com 3 h sem uso ou ao fechar o Claude."
     )
 
 
@@ -172,8 +172,8 @@ def t_approvals(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     ]
     lines += [f"- chave do time {t.get('nome_time')} para {t.get('usuario')}" for t in teams]
     lines.append(
-        "Aprovar é com o código do autenticador, no popup que aparece logo depois de cada "
-        "destrave (tranque e destrave para ver de novo). Cancelar deixa pendente."
+        "Aprovar é na caixa que aparece logo depois de cada destrave (tranque e destrave para "
+        "ver de novo). Cancelar deixa pendente."
     )
     return "\n".join(lines)
 
@@ -521,8 +521,8 @@ SCHEMAS: list[dict[str, Any]] = [
                 "confirmation": {
                     "type": "string",
                     "enum": list(AGENT_POLICIES),
-                    "description": "código do autenticador a cada uso (padrão) ou 1x por "
-                    "sessão; 'livre' e o escopo só o dono define",
+                    "description": "caixa de OK a cada uso (padrão) ou nenhuma depois do "
+                    "destrave; 'livre' e o escopo só o dono define",
                 },
                 "generate": {"type": "boolean", "description": "gerar senha forte em vez do popup"},
                 "length": {"type": "integer", "description": "tamanho da gerada (padrão 24)"},
@@ -597,8 +597,8 @@ SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "copy",
         "description": "Copia o valor para a área de transferência por alguns segundos (limpa "
-        "depois). Não me devolve o valor. Precisa do destino 'copiar'; se a política pedir, um "
-        "popup pede o código do autenticador. Nunca leia a área de transferência depois.",
+        "depois). Não me devolve o valor. Precisa do destino 'copiar'; se a política pedir, uma "
+        "caixa de OK aparece para o usuário. Nunca leia a área de transferência depois.",
         "inputSchema": {"type": "object", "properties": {"ref": _REF}, "required": ["ref"]},
     },
     {
@@ -607,7 +607,7 @@ SCHEMAS: list[dict[str, Any]] = [
         "achado no PATH, sem pasta) com credenciais no ambiente (um grupo ou caminhos; a "
         "variável é o NOME). Precisa do destino 'ambiente' com o nome do programa. Devolve o "
         "código de saída e a saída com os valores mascarados (••••). Se a política pedir, e "
-        "sempre para intérprete/shell, um popup pede o código do autenticador.",
+        "sempre para intérprete/shell, uma caixa de OK aparece para o usuário.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -703,8 +703,7 @@ SCHEMAS: list[dict[str, Any]] = [
         "name": "approvals",
         "inputSchema": _NO_ARGS,
         "description": "O que espera a aprovação do dono (compartilhamentos e chaves de time "
-        "para membros novos), sem segredo. Aprovar é com o código do autenticador, no popup "
-        "depois do destrave.",
+        "para membros novos), sem segredo. Aprovar é na caixa que aparece depois do destrave.",
     },
 ]
 assert [s["name"] for s in SCHEMAS] == list(HANDLERS)  # noqa: S101 (as duas listas andam juntas)

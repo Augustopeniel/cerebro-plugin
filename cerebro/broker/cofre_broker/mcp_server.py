@@ -113,6 +113,12 @@ def main() -> None:
     channel.start()
     channel.wait_owner(1.0)  # o status já sai com o papel certo
     C.log(f"v{C.VERSION} pronto | {len(T.SCHEMAS)} ferramentas | servidor {broker.url}")
-    McpServer(broker, channel).serve(sys.stdin, sys.stdout)
-    channel.stop()
+    try:
+        McpServer(broker, channel).serve(sys.stdin, sys.stdout)
+    finally:
+        channel.stop()
+        try:  # o Claude fechou: a sessão do cofre acaba junto (autentica de novo ao abrir)
+            broker.lock()
+        except Exception as exc:  # saindo: só registra
+            C.log(f"não trancou ao sair: {exc}")
     C.log("stdin fechado, saindo.")

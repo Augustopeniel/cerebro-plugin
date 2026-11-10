@@ -201,6 +201,9 @@ class Broker:
         self._lock = threading.RLock()  # cliente, sessão e pareamento
         self._deliver_lock = threading.Lock()  # entregas (e seus popups) uma de cada vez
         self._client: Client | None = None
+        # sessão (cvs_…) em que o código do autenticador já foi digitado: daí em diante só a
+        # caixa de OK das credenciais 'sempre'; vale até trancar, vencer ou fechar o Claude
+        self._trusted_session: str | None = None
         self._pending: dict[str, Any] | None = None
         self._seen = threading.local()
         self.channel_state = "desligado"  # o canal local escreve aqui (status)
@@ -356,11 +359,36 @@ class Broker:
                 if not password:
                     raise BrokerError("o cofre segue trancado (popup cancelado)")
             client.unlock(password)
+            self._trusted_session = None
+            self._session_code(client)
         self.review_pending()
         return {"unlocked": True}
 
+    def trusted(self) -> bool:
+        """A sessão atual já passou pelo código do autenticador (autenticou uma vez)."""
+        client = self._client
+        return bool(client and client.session and client.session == self._trusted_session)
+
+    def _session_code(self, client: Client) -> None:
+        """Logo depois da senha, o código de 6 dígitos uma vez só: o servidor passa a confiar
+        nesta sessão até trancar (3 h sem uso ou o Claude fechar). Cancelar não desfaz o
+        destrave: o código volta a ser pedido na primeira entrega."""
+        try:
+            self._with_code(
+                "Cofre destravado. Para terminar de autenticar, digite o código de 6 dígitos do "
+                "app autenticador (uma vez só: vale até fechar o Claude ou ficar 3 h sem uso; "
+                "o Claude não vê).",
+                lambda code: client.confirm(code, []),
+                "código cancelado: será pedido na primeira entrega",
+            )
+        except (BrokerError, VaultClientError) as exc:
+            C.log(f"sessão sem o código: {exc}")
+            return
+        self._trusted_session = client.session
+
     def lock(self) -> dict[str, Any]:
         with self._lock:
+            self._trusted_session = None
             if self._client is not None:
                 self._client.lock()
         return {"unlocked": False}
@@ -407,11 +435,13 @@ class Broker:
         client = self.client()
         if not client.session:
             self.unlock()
-        return self._with_code(
+        count = self._with_code(
             message,
             lambda code: client.confirm(code, items),
             "cancelado na confirmação: nada foi entregue",
         )
+        self._trusted_session = client.session  # o código certo vale para a sessão inteira
+        return count
 
     def pending(self) -> dict[str, list[dict[str, Any]]]:
         """Compartilhamentos e chaves de time esperando o dono aprovar (sem segredo)."""
@@ -448,6 +478,16 @@ class Broker:
         client = self.client()
         share_pairs = [[int(s["id"]), int(s["usuario_id"])] for s in shares]
         team_pairs = [[int(t["time"]), int(t["usuario_id"])] for t in teams]
+        if self.trusted():
+            box = message.split("\n\nDigite o código")[0] + "\n\nAprovar tudo?"
+            if not self.ui.confirm(TITLE, box):
+                C.log("aprovação cancelada: segue pendente")
+                return 0
+            try:
+                return int(client.approve("", share_pairs, team_pairs))
+            except VaultClientError as exc:
+                C.log(f"pendências não aprovadas: {exc}")
+                return 0
         try:
             return int(
                 self._with_code(
@@ -667,7 +707,15 @@ class Broker:
     ) -> tuple[dict[str, Delivery], list[str]]:
         """Entrega {nome: caminho} pela via e alvo dados. O que o servidor segurar (428) vira um
         popup só, com o código do autenticador, e é pedido de novo uma vez. Com `force`, o
-        código vem antes da 1ª entrega, mesmo com a política 'livre'."""
+        código vem antes da 1ª entrega, mesmo com a política 'livre'. Numa sessão de confiança
+        (código já digitado no destrave) o servidor não segura nada: no máximo uma caixa de OK,
+        para o pedido inteiro, se houver credencial 'sempre' (ou `force`)."""
+        client = self.client()
+        if not client.session:
+            self.unlock()
+        if self.trusted():
+            self._authorize(wanted, via, target, head, force=force)
+            force = False
         confirmed: set[int] = set()
         if force:
             entries = self._entries_for(list(wanted.values()), via, target)
@@ -711,6 +759,37 @@ class Broker:
                     "o servidor segue pedindo confirmação depois do código: nada foi entregue"
                 ) from exc
         return done, refused
+
+    def _authorize(
+        self, wanted: dict[str, str], via: str, target: str, head: str, *, force: bool
+    ) -> None:
+        """Caixa de OK (sem código) antes de entregar credenciais 'sempre' numa sessão de
+        confiança. Destinos recusados não entram na lista: o servidor recusa na entrega."""
+        if force:  # digitar e intérprete: destino conferido antes, sem nem perguntar
+            entries = self._entries_for(sorted(set(wanted.values())), via, target)
+            items = [{"caminho": e["caminho"], "via": via, "alvo": target} for e in entries]
+            wanted = {}
+        listed = self.client().list() if wanted else []
+        by_ref = {str(e["caminho"]).lower(): e for e in listed}
+        items = items if force else []
+        for path in sorted(set(wanted.values())):
+            entry = by_ref.get(str(path).strip().strip("/").lower())
+            if entry is None:
+                continue
+            allowed = any(
+                d.get("via") == via and d.get("alvo") in ("*", target)
+                for d in entry.get("destinos") or []
+            )
+            if allowed and (force or entry.get("confirmacao") == "sempre"):
+                items.append({"caminho": entry["caminho"], "via": via, "alvo": target})
+        if not items:
+            return
+        message = (
+            f"{head}\n\nCredenciais:\n{self._items_text(items)}\n\nAutorizar? (o código já foi "
+            "digitado no destrave; o Claude não vê o valor)"
+        )
+        if not self.ui.confirm(TITLE, message):
+            raise BrokerError("cancelado na autorização: nada foi entregue")
 
     def _group_entries(self, group: str) -> dict[str, str]:
         """{NOME: caminho} das entradas diretas do grupo (o nome é o da variável)."""

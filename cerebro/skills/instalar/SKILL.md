@@ -26,10 +26,11 @@ Prepare este Claude para usar o cérebro. Fale com o usuário no idioma dele. **
    b) **Memória automática do Claude Code desligada** (`"autoMemoryEnabled": false` no `settings.json` do usuário). Motivo: a memória passa a ser o cérebro, e duas memórias se contradizem. Se o usuário escolheu conviver com a memória automática no passo 2, não proponha este item.
    c) **Leituras do cérebro sem pedir permissão a cada vez.** Entram em `permissions.allow` do `settings.json` só estas ferramentas:
       `mcp__plugin_cerebro_cerebro__load_context`, `mcp__plugin_cerebro_cerebro__read_index`, `mcp__plugin_cerebro_cerebro__read_note`, `mcp__plugin_cerebro_cerebro__search`, `mcp__plugin_cerebro_cerebro__guia`, `mcp__plugin_cerebro_cerebro__session_status`, `mcp__plugin_cerebro_cerebro__note_history` e `mcp__plugin_cerebro_cerebro__recent_changes`.
+   d) **Atualização automática do plugin.** Em `extraKnownMarketplaces` do `settings.json`, a entrada `cerebro-vivo` ganha `"autoUpdate": true`, ao lado de `source`. Se a entrada não existir, crie-a com `"source": {"source": "github", "repo": "Augustopeniel/cerebro-plugin"}`. Motivo: marketplace de terceiro vem sem atualização automática. Com ela, o Claude baixa a versão nova sozinho, alguns minutos depois da primeira mensagem, e a versão vale na sessão seguinte. Não é preciso vincular o aparelho nem entrar no portal de novo.
 4. **Aplique só o que foi aprovado (passos 2 e 3):**
    - antes de mexer no `settings.json` ou no CLAUDE.md fora do bloco, rode `cerebro-plugin backup "${CLAUDE_PLUGIN_DATA}"` e guarde a pasta que ele imprime;
    - a) `cerebro-plugin instalar-bloco "${CLAUDE_PLUGIN_DATA}"`, que faz o próprio backup e troca só o bloco;
-   - b), c) e o que for desligar: edite o `settings.json` do usuário (`~/.claude/settings.json`, ou o da pasta em `CLAUDE_CONFIG_DIR`). Preserve todo o resto, mantenha o JSON válido e não duplique entradas. O Claude Code pede a aprovação do usuário para editar esse arquivo: explique antes que o pedido vai aparecer;
+   - b), c), d) e o que for desligar: edite o `settings.json` do usuário (`~/.claude/settings.json`, ou o da pasta em `CLAUDE_CONFIG_DIR`). Preserve todo o resto, mantenha o JSON válido e não duplique entradas. O Claude Code pede a aprovação do usuário para editar esse arquivo: explique antes que o pedido vai aparecer;
    - importações e decisões de convivência: com as ferramentas do cérebro, como combinado no passo 2.
 5. **Confira:** rode o diagnóstico de novo.
 6. **Termine** com, por item:
