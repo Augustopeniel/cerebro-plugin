@@ -264,7 +264,10 @@ func (p *perfil) cofre(args []string) int {
 			return 1
 		}
 	}
-	c := exec.Command(p.caminhoUV(), p.argsDoUV(append([]string{"cerebro-cofre"}, args...)...)...)
+	// pelo python do venv, não pelo cerebro-cofre.exe que o uv gera: políticas de empresa
+	// (AppLocker/WDAC, antivírus) barram esse executável no Windows e o MCP cai ao subir
+	modulo := append([]string{"python", "-m", "cofre_broker.cli"}, args...)
+	c := exec.Command(p.caminhoUV(), p.argsDoUV(modulo...)...)
 	c.Env = p.ambienteUV()
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	repassarSinais(c)
