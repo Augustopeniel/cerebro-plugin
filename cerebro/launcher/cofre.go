@@ -63,13 +63,20 @@ func (p *perfil) caminhoUV() string {
 }
 func (p *perfil) broker() string { return filepath.Join(p.raiz, "broker") }
 
+// um venv por versão instalada do plugin: a sessão antiga do Claude segue com o venv dela aberto
+// (no Windows, um .exe em uso não pode ser apagado) enquanto a versão nova monta o seu ao lado
+func (p *perfil) venvCofre() string {
+	h := sha256.Sum256([]byte(p.broker()))
+	return filepath.Join(p.pastaRuntime(), "venv-cofre-"+hex.EncodeToString(h[:])[:10])
+}
+
 // ambiente do uv: Python e bibliotecas só na pasta do plugin
 func (p *perfil) ambienteUV() []string {
 	rt := p.pastaRuntime()
 	env := []string{
 		"UV_CACHE_DIR=" + filepath.Join(rt, "cache"),
 		"UV_PYTHON_INSTALL_DIR=" + filepath.Join(rt, "python"),
-		"UV_PROJECT_ENVIRONMENT=" + filepath.Join(rt, "venv-cofre"),
+		"UV_PROJECT_ENVIRONMENT=" + p.venvCofre(),
 		"UV_PYTHON=" + versaoPython,
 		"UV_PYTHON_PREFERENCE=only-managed",
 		"UV_PYTHON_DOWNLOADS=automatic",

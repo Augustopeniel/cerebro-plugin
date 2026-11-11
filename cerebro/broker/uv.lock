@@ -67,7 +67,7 @@ wheels = [
 
 [[package]]
 name = "cerebro-cofre-broker"
-version = "2.5.1"
+version = "2.5.2"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },
