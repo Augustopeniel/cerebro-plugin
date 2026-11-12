@@ -4,9 +4,10 @@ O valor entra pelo popup mascarado ou é gerado (`generate`); sai só para o des
 (digitar, copiar, o ambiente de um comando, outro MCP pelo canal). As respostas são texto com
 metadados, e mesmo assim passam pela máscara com tudo o que foi entregue na chamada.
 
-O que só o dono decide (no portal) e as ferramentas recusam: destino com alvo `*`
-(digitar e copiar, por exemplo), a política `livre` e o escopo. O código do pareamento também
-não volta ao modelo: só aparece na tela da pessoa.
+Destinos não se cadastram aqui: a credencial do dono vai para qualquer destino e ele decide na
+hora (o código, ou a caixa com "Liberar destino"); a de quem recebe segue a lista do dono. O
+que só o dono decide (no portal) e as ferramentas recusam: a política `livre` e o escopo. O
+código do pareamento também não volta ao modelo: só aparece na tela da pessoa.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Any
 
 from . import config as C
 from . import platform_io as P
-from .broker import KINDS, VIAS, Broker, BrokerError
+from .broker import KINDS, Broker, BrokerError
 from .keystore import KeystoreError
 from .mask import mask_text
 from .protocol import VaultClientError
@@ -44,8 +45,10 @@ def _when(ts: Any) -> str:
 
 
 def _destinations_text(entry: dict[str, Any]) -> str:
-    found = [f"{d.get('via')}:{d.get('alvo')}" for d in entry.get("destinos") or []]
-    return ", ".join(found) or "nenhum (não entrega para lugar nenhum)"
+    found = ", ".join(f"{d.get('via')}:{d.get('alvo')}" for d in entry.get("destinos") or [])
+    if entry.get("papel") == "dono":
+        return f"qualquer um, você decide na hora (liberados sem perguntar: {found or 'nenhum'})"
+    return found or "nenhum (o dono define no portal)"
 
 
 def _entry_line(entry: dict[str, Any]) -> str:
@@ -59,23 +62,6 @@ def _entry_line(entry: dict[str, Any]) -> str:
     if entry.get("arquivada"):
         extra.append("ARQUIVADA")
     return f"- {entry.get('caminho')} ({'; '.join(extra)})"
-
-
-def _agent_destinations(items: Any) -> list[dict[str, str]]:
-    """Destinos que o modelo pode pedir: um comando (ambiente) ou um consumidor (mcp) dito pelo
-    nome. Alvo `*` (digitar, copiar, qualquer comando) fica para o dono."""
-    found = []
-    for item in items or []:
-        if not isinstance(item, dict):
-            raise BrokerError(f"destino inválido: {item!r}")
-        target = str(item.get("target") or "").strip()
-        if item.get("via") in ("digitar", "copiar") or not target or "*" in target:
-            raise BrokerError(
-                f"destino {item.get('via')}:{target or '*'}: alvo '*' {OWNER_ONLY}; aqui só "
-                "ambiente:<comando> ou mcp:<consumidor>"
-            )
-        found.append({"via": str(item.get("via")), "target": target})
-    return found
 
 
 def _saved(verb: str, entry: dict[str, Any]) -> str:
@@ -182,7 +168,6 @@ def t_store(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
         raise BrokerError(f"confirmação '{confirm}' {OWNER_ONLY}; aqui: sempre ou sessao")
     if args.get("scope"):
         raise BrokerError(f"o escopo {OWNER_ONLY}; aqui vale o cérebro do aparelho")
-    destinations = _agent_destinations(args.get("destinations"))
     fields = {
         k: args.get(src)
         for k, src in (("usuario", "username"), ("url", "url"), ("descricao", "description"))
@@ -193,7 +178,6 @@ def t_store(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
         length=int(args.get("length") or 24),
         kind=str(args.get("kind") or "senha"),
         fields={k: str(v) for k, v in fields.items() if v},
-        destinations=destinations,
         confirm=confirm,
     )
     how = "com senha forte gerada (ninguém a viu)" if args.get("generate") else "pelo popup"
@@ -233,7 +217,6 @@ def t_import_env(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
         path,
         str(args.get("group") or ""),
         names=args.get("names") or None,
-        destinations=_agent_destinations(args.get("destinations")),
         cwd=cwd,
     )
     lines = [
@@ -248,11 +231,6 @@ def t_import_env(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
         "O .env NÃO foi alterado: esvazie-o depois de conferir que o MCP funciona. Eu não vi "
         "os valores."
     )
-    if not args.get("destinations"):
-        lines.append(
-            "Atenção: sem destinos, nenhuma delas é entregue ainda; o dono diz os destinos no "
-            "portal."
-        )
     return "\n".join(lines)
 
 
@@ -429,22 +407,6 @@ def call_tool(broker: Broker, name: str, args: dict[str, Any], cwd: str | None) 
 # ----------------------------------------------------------- schemas -----
 
 _REF = {"type": "string", "description": "caminho da credencial, ex.: 'mcp/zabbix/ZABBIX_PASS'"}
-_DESTINATIONS = {
-    "type": "array",
-    "description": "para onde ela pode ir (lista fechada; sem destino não vai a lugar nenhum)",
-    "items": {
-        "type": "object",
-        "properties": {
-            "via": {"type": "string", "enum": list(VIAS)},
-            "target": {
-                "type": "string",
-                "description": "nome do comando (ambiente) ou do consumidor (mcp); alvo '*', "
-                "digitar e copiar só o dono define (no portal)",
-            },
-        },
-        "required": ["via", "target"],
-    },
-}
 _NO_ARGS = {"type": "object", "properties": {}}
 
 SCHEMAS: list[dict[str, Any]] = [
@@ -501,7 +463,6 @@ SCHEMAS: list[dict[str, Any]] = [
                 "username": {"type": "string"},
                 "url": {"type": "string"},
                 "description": {"type": "string"},
-                "destinations": _DESTINATIONS,
                 "confirmation": {
                     "type": "string",
                     "enum": list(AGENT_POLICIES),
@@ -566,7 +527,6 @@ SCHEMAS: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": "só estas variáveis (padrão: as de nome secreto)",
                 },
-                "destinations": _DESTINATIONS,
             },
             "required": ["path", "group"],
         },
@@ -575,23 +535,23 @@ SCHEMAS: list[dict[str, Any]] = [
         "name": "inject",
         "description": "Digita o valor no campo em FOCO, sem me devolver. Um popup pede o código "
         "do app autenticador sempre (o usuário põe o cursor no campo e digita o código); terminal "
-        "e Claude são recusados. Precisa do destino 'digitar'. Se falhar, use 'copy'.",
+        "e Claude são recusados. Se falhar, use 'copy'.",
         "inputSchema": {"type": "object", "properties": {"ref": _REF}, "required": ["ref"]},
     },
     {
         "name": "copy",
         "description": "Copia o valor para a área de transferência por alguns segundos (limpa "
-        "depois). Não me devolve o valor. Precisa do destino 'copiar'; se a política pedir, uma "
-        "caixa de OK aparece para o usuário. Nunca leia a área de transferência depois.",
+        "depois). Não me devolve o valor. O usuário autoriza num popup (o código ou a caixa de "
+        "OK). Nunca leia a área de transferência depois.",
         "inputSchema": {"type": "object", "properties": {"ref": _REF}, "required": ["ref"]},
     },
     {
         "name": "run",
         "description": "Roda um comando (lista de argumentos, sem shell; o programa pelo nome, "
         "achado no PATH, sem pasta) com credenciais no ambiente (um grupo ou caminhos; a "
-        "variável é o NOME). Precisa do destino 'ambiente' com o nome do programa. Devolve o "
-        "código de saída e a saída com os valores mascarados (••••). Se a política pedir, e "
-        "sempre para intérprete/shell, uma caixa de OK aparece para o usuário.",
+        "variável é o NOME). Devolve o código de saída e a saída com os valores mascarados "
+        "(••••). Programa novo para a credencial, a política 'sempre' e intérprete/shell "
+        "mostram ao usuário uma caixa (ou o código) com o programa e os argumentos.",
         "inputSchema": {
             "type": "object",
             "properties": {

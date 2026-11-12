@@ -8,8 +8,9 @@ direto ao destino e é esquecido.
 Garantias daqui:
 - o valor nunca entra por argumento de ferramenta: vem do popup mascarado ou é gerado;
 - a entrega usa a via certa e o alvo certo (`run`: o nome do comando, que vem do PATH; `mcp`: o
-  consumidor; digitar e copiar: `*`), e quem decide se o destino vale é o servidor (lista
-  fechada);
+  consumidor; digitar e copiar: `*`), e quem decide se o destino vale é o servidor: o dono da
+  credencial manda para qualquer destino e decide na hora (o código, ou a caixa com "Liberar
+  destino" na sessão de confiança); quem recebe (time, compartilhamento) segue a lista do dono;
 - a confirmação é exigida pelo SERVIDOR (HTTP 428) e liberada com o código de 6 dígitos do app
   autenticador, digitado num popup mascarado: um OK o agente de IA conseguiria clicar (System
   Events, computer-use), o código ele não tem. Ao digitar e ao rodar um intérprete o broker pede
@@ -180,6 +181,18 @@ def _destinations(items: Any) -> list[dict[str, str]]:
             raise BrokerError(f"destino inválido: {item!r} (via: {', '.join(VIAS)})")
         found.append({"via": item["via"], "alvo": str(item.get("target") or "*")})
     return found
+
+
+def _listed(entry: dict[str, Any], via: str, target: str) -> bool:
+    """O destino está na lista da credencial (liberado, não pergunta)."""
+    return any(
+        d.get("via") == via and d.get("alvo") in ("*", target) for d in entry.get("destinos") or []
+    )
+
+
+def _owner(entry: dict[str, Any]) -> bool:
+    """Credencial sua (ou de um time de que você é dono): vai para qualquer destino."""
+    return entry.get("papel") == "dono"
 
 
 class Broker:
@@ -707,7 +720,8 @@ class Broker:
 
     def _entries_for(self, refs: list[str], via: str, target: str) -> list[dict[str, Any]]:
         """Metadados das credenciais (para confirmar antes da 1ª entrega). O destino é conferido
-        aqui só para não pedir o código à toa: quem decide é o servidor, na entrega."""
+        aqui só para não pedir o código à toa: quem decide é o servidor, na entrega. O dono
+        manda para qualquer destino; quem recebe, só para os da lista."""
         # sessão que o servidor esqueceu (portal reiniciado): destrava de novo e tenta uma vez
         listed = self._relocking(lambda: self.client().list())
         by_ref = {str(e["caminho"]).lower(): e for e in listed} | {str(e["id"]): e for e in listed}
@@ -716,14 +730,10 @@ class Broker:
             entry = by_ref.get(str(ref).strip().strip("/").lower())
             if entry is None:
                 raise BrokerError(f"credencial {ref!r} não encontrada neste cérebro")
-            allowed = any(
-                d.get("via") == via and d.get("alvo") in ("*", target)
-                for d in entry.get("destinos") or []
-            )
-            if not allowed:
+            if not _listed(entry, via, target) and not _owner(entry):
                 raise BrokerError(
-                    f"destino {via}:{target} não permitido para {entry['caminho']} (o dono "
-                    "define os destinos no portal)"
+                    f"destino {via}:{target} não permitido para {entry['caminho']} (a "
+                    "credencial não é sua: o dono define os destinos no portal)"
                 )
             found.append(entry)
         return found
@@ -800,9 +810,12 @@ class Broker:
         self, wanted: dict[str, str], via: str, target: str, head: str, *, force: bool
     ) -> None:
         """Caixa de autorização (sem código) numa sessão de confiança, antes de copiar, digitar,
-        rodar intérprete (`force`) ou entregar credencial 'sempre'. Destinos recusados não
-        entram na lista: o servidor recusa na entrega."""
+        rodar intérprete (`force`), entregar credencial 'sempre' ou mandar uma credencial sua a
+        um destino que ainda não está na lista dela. Destino novo ganha três botões: Negar, Só
+        desta vez e Liberar destino (põe na lista; da próxima vez não pergunta). Destinos
+        recusados (credencial de outro dono) não entram: o servidor recusa na entrega."""
         items: list[dict[str, Any]] = []
+        fresh: list[dict[str, Any]] = []  # credenciais suas indo a um destino fora da lista
         if force:  # copiar, digitar e intérprete: destino conferido antes, sem nem perguntar
             entries = self._entries_for(sorted(set(wanted.values())), via, target)
             items = [{"caminho": e["caminho"], "via": via, "alvo": target} for e in entries]
@@ -813,20 +826,42 @@ class Broker:
             entry = by_ref.get(str(path).strip().strip("/").lower())
             if entry is None:
                 continue
-            allowed = any(
-                d.get("via") == via and d.get("alvo") in ("*", target)
-                for d in entry.get("destinos") or []
-            )
-            if allowed and entry.get("confirmacao") == "sempre":
-                items.append({"caminho": entry["caminho"], "via": via, "alvo": target})
+            item = {"id": entry.get("id"), "caminho": entry["caminho"], "via": via, "alvo": target}
+            if _listed(entry, via, target):
+                if entry.get("confirmacao") == "sempre":
+                    items.append(item)
+            elif _owner(entry):
+                items.append(item)
+                fresh.append(item)
         if not items:
             return
+        if not fresh:
+            message = (
+                f"{head}\n\nCredenciais:\n{self._items_text(items)}\n\nAutorizar? (o código já "
+                "foi digitado no destrave; o Claude não vê o valor)"
+            )
+            if not self.ui.confirm(TITLE, message):
+                raise BrokerError("cancelado na autorização: nada foi entregue")
+            return
         message = (
-            f"{head}\n\nCredenciais:\n{self._items_text(items)}\n\nAutorizar? (o código já foi "
-            "digitado no destrave; o Claude não vê o valor)"
+            f"{head}\n\nCredenciais:\n{self._items_text(items)}\n\n"
+            f"Destino novo para {len(fresh)} delas ({via}:{target}): confira se foi você quem "
+            "pediu.\n• Só desta vez: entrega agora e pergunta de novo da próxima.\n"
+            "• Liberar destino: entrega e, da próxima vez, este destino não pergunta (copiar, "
+            "digitar, intérprete e 'sempre' perguntam sempre).\n(O Claude não vê o valor.)"
         )
-        if not self.ui.confirm(TITLE, message):
-            raise BrokerError("cancelado na autorização: nada foi entregue")
+        choice = getattr(self.ui, "choose", None)
+        answer = choice(TITLE, message) if choice else ("uma" if self.ui.confirm(TITLE, message)
+                                                        else None)  # fmt: skip
+        if answer not in ("uma", "liberar"):
+            raise BrokerError("negado na autorização: nada foi entregue")
+        if answer == "liberar":
+            client = self.client()
+            for item in fresh:
+                try:
+                    client.allow(int(item["id"]), via, target)
+                except VaultClientError as exc:  # não liberou: entrega mesmo assim, desta vez
+                    C.log(f"liberar {item['caminho']} → {via}:{target}: {exc}")
 
     def _group_entries(self, group: str) -> dict[str, str]:
         """{NOME: caminho} das entradas diretas do grupo (o nome é o da variável)."""

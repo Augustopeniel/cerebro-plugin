@@ -439,6 +439,12 @@ class Client:
         answer = self._call("confirmar", lambda t: {"codigo": code, "itens": wire}, session=True)[1]
         return int(answer.get("confirmadas", 0))
 
+    def allow(self, item_id: int, via: str, target: str) -> dict[str, Any]:
+        """Liberar destino: o dono põe (via, alvo) na lista da credencial; da próxima vez não
+        pergunta. Só na sessão de confiança (o servidor confere)."""
+        data = {"id": int(item_id), "via": str(via), "alvo": str(target)}
+        return self._call("liberar", lambda t: data, session=True)[1]["credencial"]
+
     def pending(self) -> dict[str, list[dict[str, Any]]]:
         """O que espera a aprovação do dono: compartilhamentos e chaves de time (sem segredo)."""
         answer = self._call("pendencias", lambda t: {}, session=True)[1]
@@ -461,7 +467,9 @@ class Client:
         """O valor de uma credencial, aberto aqui; quem chama injeta no destino e esquece.
         Sem confirmação válida no servidor: ConfirmationRequired (HTTP 428). `program`: na via
         `mcp`, a impressão do processo que pediu (o servidor confere com as aprovadas)."""
-        body = {"ref": ref, "via": via, "alvo": target}
+        # "dono decide": este broker (2.8.0+) mostra a caixa de destino novo; sem isso o servidor
+        # mantém a lista fechada também para o dono (broker antigo entregaria sem perguntar)
+        body: dict[str, Any] = {"ref": ref, "via": via, "alvo": target, "dono_decide": True}
         if program:
             body["programa"] = program
         timestamp, answer = self._call("entregar", lambda t: dict(body), session=True)

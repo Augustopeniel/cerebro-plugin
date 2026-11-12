@@ -124,6 +124,20 @@ _OSA_CONFIRM = (
     'default button "OK" cancel button "Cancelar"\n'
     'return "OK"\n'
 )
+# três botões (Negar / Só desta vez / Liberar destino): os rótulos também chegam pelo ambiente,
+# e a resposta volta como palavra fixa, sem acento
+_OSA_CHOOSE = (
+    "activate\n"
+    'set t to (do shell script "printf %s \\"$COFRE_DLG_TITLE\\"" without altering line endings)\n'
+    'set m to (do shell script "printf %s \\"$COFRE_DLG_MSG\\"" without altering line endings)\n'
+    'set b1 to (do shell script "printf %s \\"$COFRE_DLG_B1\\"")\n'
+    'set b2 to (do shell script "printf %s \\"$COFRE_DLG_B2\\"")\n'
+    'set b3 to (do shell script "printf %s \\"$COFRE_DLG_B3\\"")\n'
+    "set r to display dialog m with title t buttons {b1, b2, b3} "
+    "default button b2 cancel button b1\n"
+    'if button returned of r is b3 then return "liberar"\n'
+    'return "uma"\n'
+)
 _OSA_INFO = (
     "activate\n"
     'set t to (do shell script "printf %s \\"$COFRE_DLG_TITLE\\"" without altering line endings)\n'
@@ -177,6 +191,13 @@ _PS_CONFIRM = (
     "$r = [System.Windows.Forms.MessageBox]::Show($env:COFRE_DLG_MSG, "
     "$env:COFRE_DLG_TITLE, 'OKCancel', 'Question'); "
     "if ($r -eq 'OK') { 'OK' } else { exit 1 }"
+)
+# MessageBox não troca os rótulos: Sim / Não / Cancelar, explicados no texto
+_PS_CHOOSE = (
+    "Add-Type -AssemblyName System.Windows.Forms; "
+    "$r = [System.Windows.Forms.MessageBox]::Show($env:COFRE_DLG_MSG, "
+    "$env:COFRE_DLG_TITLE, 'YesNoCancel', 'Question', 'Button2'); "
+    "if ($r -eq 'Yes') { 'liberar' } elseif ($r -eq 'No') { 'uma' } else { exit 1 }"
 )
 _PS_INFO = (
     "Add-Type -AssemblyName System.Windows.Forms; "
@@ -359,6 +380,49 @@ def confirm(title: str, message: str) -> bool:
     if IS_LINUX:
         return _linux("ok", title, message)[0]
     raise _unsupported("popup")
+
+
+DENY, ONCE, ALLOW = "Negar", "Só desta vez", "Liberar destino"
+
+
+def _linux_choose(title: str, message: str) -> str | None:
+    tool = _linux_dialog()
+    if tool is None:
+        raise _unsupported("popup")
+    if tool == "zenity":
+        # o botão extra sai com código 1 e escreve o rótulo no stdout
+        labels = [f"--ok-label={ONCE}", f"--cancel-label={DENY}", f"--extra-button={ALLOW}"]
+        args = ["zenity", "--question", f"--title={title}", f"--text={message}", *labels]
+        r = _run(args, timeout=POPUP_TIMEOUT_S)
+        if r is None:
+            return None
+        if r.returncode == 0:
+            return "uma"
+        return "liberar" if r.stdout.strip() == ALLOW else None
+    args = ["kdialog", "--title", title, "--yesnocancel", message, "--yes-label", ONCE,
+            "--no-label", ALLOW, "--cancel-label", DENY]  # fmt: skip
+    r = _run(args, timeout=POPUP_TIMEOUT_S)
+    if r is None:
+        return None
+    return {0: "uma", 1: "liberar"}.get(r.returncode)
+
+
+def choose(title: str, message: str) -> str | None:
+    """Caixa de autorização de destino novo: 'uma' (só desta vez), 'liberar' (põe o destino na
+    lista, da próxima vez não pergunta) ou None (negou, fechou ou o tempo acabou)."""
+    if IS_MAC:
+        env = _dialog_env(title, message) | {
+            "COFRE_DLG_B1": DENY, "COFRE_DLG_B2": ONCE, "COFRE_DLG_B3": ALLOW,
+        }  # fmt: skip
+        found = _osascript(_OSA_CHOOSE, env)
+    elif IS_WINDOWS:
+        text = f"{message}\n\nSim = {ALLOW} · Não = {ONCE} · Cancelar = {DENY}"
+        found = _powershell(_PS_CHOOSE, _dialog_env(title, text))
+    elif IS_LINUX:
+        found = _linux_choose(title, message)
+    else:
+        raise _unsupported("popup")
+    return found if found in ("uma", "liberar") else None
 
 
 def show_info(title: str, message: str) -> None:
