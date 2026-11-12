@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -29,6 +30,7 @@ from . import config as C
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = os.name == "nt"
+IS_LINUX = sys.platform.startswith("linux")
 POPUP_TIMEOUT_S = 300
 
 # o foco não pode estar num terminal ou no próprio Claude: o valor iria parar na conversa
@@ -66,11 +68,15 @@ class PlatformError(Exception):
 
 
 def platform_name() -> str:
-    return "macOS" if IS_MAC else ("Windows" if IS_WINDOWS else sys.platform)
+    if IS_MAC:
+        return "macOS"
+    return "Windows" if IS_WINDOWS else ("Linux" if IS_LINUX else sys.platform)
 
 
 def _unsupported(what: str) -> PlatformError:
-    return PlatformError(f"{what} não suportado neste sistema ({platform_name()}): use a janela")
+    hint = (" (instale o zenity ou o kdialog, e o xclip/wl-clipboard e o xdotool/wtype)"
+            if IS_LINUX else "")  # fmt: skip
+    return PlatformError(f"{what} não suportado neste sistema ({platform_name()}){hint}")
 
 
 def _run(
@@ -302,12 +308,45 @@ def _dialog_env(title: str, message: str) -> dict[str, str]:
     }
 
 
+# ---------------------------------------------------------------- Linux -----
+# zenity (GNOME e a maioria) ou kdialog (KDE): o texto vai por argumento, o segredo volta pelo
+# stdout do diálogo (nunca por argumento de outro programa)
+
+
+def _linux_dialog() -> str | None:
+    return next((t for t in ("zenity", "kdialog") if shutil.which(t)), None)
+
+
+def _linux(kind: str, title: str, message: str) -> tuple[bool, str]:
+    tool = _linux_dialog()
+    if tool is None:
+        raise _unsupported("popup")
+    if tool == "zenity":
+        flags = {
+            "senha": ["--entry", "--hide-text", f"--text={message}"],
+            "ok": ["--question", f"--text={message}"],
+            "aviso": ["--info", f"--text={message}"],
+        }[kind]
+        args = ["zenity", *flags, f"--title={title}"]
+    else:
+        flags = {"senha": ["--password", message], "ok": ["--yesno", message],
+                 "aviso": ["--msgbox", message]}[kind]  # fmt: skip
+        args = ["kdialog", "--title", title, *flags]
+    r = _run(args, timeout=POPUP_TIMEOUT_S)
+    if r is None:
+        return False, ""
+    return r.returncode == 0, r.stdout.rstrip("\n")
+
+
 def prompt_secret(title: str, message: str) -> str | None:
     """Diálogo nativo com campo mascarado. Devolve o texto ou None (cancelou)."""
     if IS_MAC:
         return _osascript(_OSA_PROMPT, _dialog_env(title, message))
     if IS_WINDOWS:
         return _powershell(_PS_PROMPT, _dialog_env(title, message))
+    if IS_LINUX:
+        ok, out = _linux("senha", title, message)
+        return out if ok and out else None
     raise _unsupported("popup")
 
 
@@ -317,6 +356,8 @@ def confirm(title: str, message: str) -> bool:
         return _osascript(_OSA_CONFIRM, _dialog_env(title, message)) == "OK"
     if IS_WINDOWS:
         return _powershell(_PS_CONFIRM, _dialog_env(title, message)) == "OK"
+    if IS_LINUX:
+        return _linux("ok", title, message)[0]
     raise _unsupported("popup")
 
 
@@ -326,6 +367,8 @@ def show_info(title: str, message: str) -> None:
         job = (_osascript, (_OSA_INFO, _dialog_env(title, message)))
     elif IS_WINDOWS:
         job = (_powershell, (_PS_INFO, _dialog_env(title, message)))
+    elif IS_LINUX and _linux_dialog():
+        job = (_linux, ("aviso", title, message))
     else:
         C.log(f"{title}: {message}")
         return
@@ -368,6 +411,17 @@ def type_text(secret: str) -> None:
     if IS_WINDOWS:
         _win_type(secret)  # confere o foco logo antes do SendInput
         return
+    if IS_LINUX:  # o texto vai pelo stdin (nunca por argumento, que o `ps` mostraria)
+        if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wtype"):
+            r = _run(["wtype", "-"], stdin=secret, timeout=30)
+        elif shutil.which("xdotool"):
+            r = _run(["xdotool", "type", "--clearmodifiers", "--file", "-"], stdin=secret,
+                     timeout=30)  # fmt: skip
+        else:
+            raise _unsupported("digitar")
+        if r is None or r.returncode != 0:
+            raise PlatformError("não consegui digitar; use 'copy'")
+        return
     raise _unsupported("digitar")
 
 
@@ -382,6 +436,19 @@ def _paste() -> str | None:
     if IS_WINDOWS:
         out = _powershell(_PS_PASTE)
         return base64.b64decode(out).decode("utf-8", "replace") if out else None
+    if IS_LINUX and (cmd := _linux_clip(copy=False)):
+        r = _run(cmd, timeout=10)
+        return r.stdout if r and r.returncode == 0 else None
+    return None
+
+
+def _linux_clip(*, copy: bool) -> list[str] | None:
+    """Comando da área de transferência no Linux (Wayland ou X11): copiar, ou ler para conferir
+    antes de limpar."""
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        return ["wl-copy"] if copy else ["wl-paste", "--no-newline"]
+    if shutil.which("xclip"):
+        return ["xclip", "-selection", "clipboard"] + ([] if copy else ["-o"])
     return None
 
 
@@ -394,6 +461,8 @@ def _clear_if(expected: str) -> None:
         _run(["pbcopy"], stdin="", extra_env=_UTF8, timeout=10)
     elif IS_WINDOWS:
         _powershell(_PS_CLEAR)
+    elif IS_LINUX and (cmd := _linux_clip(copy=True)):
+        _run(cmd, stdin="", timeout=10)
 
 
 def copy_clipboard(secret: str, ttl: int) -> None:
@@ -405,6 +474,9 @@ def copy_clipboard(secret: str, ttl: int) -> None:
     elif IS_WINDOWS:
         packed = base64.b64encode(secret.encode("utf-8")).decode()
         ok = _powershell(_PS_COPY, stdin=packed) is not None
+    elif IS_LINUX and (cmd := _linux_clip(copy=True)):
+        r = _run(cmd, stdin=secret, timeout=10)
+        ok = r is not None and r.returncode == 0
     else:
         raise _unsupported("área de transferência")
     if not ok:

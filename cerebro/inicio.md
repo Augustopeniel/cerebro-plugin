@@ -16,5 +16,5 @@
 - /cerebro:exportar — exporta o cérebro inteiro em .zip (notas, histórico e manifesto)
 - /cerebro:instalar — prepara este Claude para o cérebro (bloco no CLAUDE.md, com backup e ok)
 - /cerebro:desinstalar — desfaz o que o instalar fez
-- /cerebro:cofre — cofre de senhas: janela, vincular, configurar; valor nunca na conversa
+- /cerebro:cofre — cofre de senhas só com popups: vincular, configurar, destravar; valor nunca na conversa
 - /cerebro:help — esta tabela: todos os comandos do cérebro e o que cada um faz

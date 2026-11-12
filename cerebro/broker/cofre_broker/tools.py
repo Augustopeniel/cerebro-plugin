@@ -1,10 +1,10 @@
 """Ferramentas do MCP local `cofre`: nenhuma devolve nem recebe o valor de uma credencial.
 
-O valor entra pelo popup mascarado, pela janela ou é gerado (`generate`); sai só para o destino
+O valor entra pelo popup mascarado ou é gerado (`generate`); sai só para o destino
 (digitar, copiar, o ambiente de um comando, outro MCP pelo canal). As respostas são texto com
 metadados, e mesmo assim passam pela máscara com tudo o que foi entregue na chamada.
 
-O que só o dono decide (no portal ou na janela) e as ferramentas recusam: destino com alvo `*`
+O que só o dono decide (no portal) e as ferramentas recusam: destino com alvo `*`
 (digitar e copiar, por exemplo), a política `livre` e o escopo. O código do pareamento também
 não volta ao modelo: só aparece na tela da pessoa.
 """
@@ -12,9 +12,6 @@ não volta ao modelo: só aparece na tela da pessoa.
 from __future__ import annotations
 
 import datetime as dt
-import os
-import subprocess
-import sys
 import time
 from collections.abc import Callable
 from typing import Any
@@ -27,9 +24,9 @@ from .mask import mask_text
 from .protocol import VaultClientError
 
 Handler = Callable[[Broker, dict[str, Any], str | None], str]
-LOCAL_ONLY = frozenset({"open_window"})  # roda em quem recebeu a chamada, nunca é repassada
-AGENT_POLICIES = ("sempre", "sessao")  # 'livre' só o dono define (portal ou janela)
-OWNER_ONLY = "só o dono define, no portal ou na janela (`open_window`)"
+LOCAL_ONLY = frozenset({"setup"})  # popups na máquina de quem recebeu a chamada
+AGENT_POLICIES = ("sempre", "sessao")  # 'livre' só o dono define (no portal)
+OWNER_ONLY = "só o dono define, no portal"
 
 
 def _ref(args: dict[str, Any], key: str = "ref") -> str:
@@ -95,7 +92,7 @@ def t_status(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     s = broker.state()
     lines = [f"{s['name']} {s['version']} | {s['platform']} | servidor {s['server']}"]
     if not s["paired"]:
-        lines.append("aparelho: NÃO vinculado — use `pair` ou a janela (`open_window`)")
+        lines.append("aparelho: NÃO vinculado — use `pair`")
     else:
         lines.append(f"aparelho: {s.get('device_name') or '-'} ({s.get('device')})")
     lines.append(f"chaves do aparelho: {s['keystore']}")
@@ -105,14 +102,14 @@ def t_status(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
         lines.append(f"conta no portal: {s['account']}")
     if s.get("pairing"):
         lines.append(
-            "pareamento pendente: o código e as impressões estão na tela do usuário (popup "
-            "ou janela)"
+            "pareamento pendente: o código e as impressões estão na tela do usuário (popup e "
+            "navegador)"
         )
     if s.get("error"):
         lines.append(f"[ERRO] servidor: {s['error']}")
     elif s["paired"]:
         if not s.get("configured"):
-            lines.append("cofre: ainda não configurado — configure na janela (`open_window`)")
+            lines.append("cofre: ainda não configurado — use `setup` (só popups)")
         else:
             state = "DESTRAVADO" if s.get("unlocked") else "TRANCADO"
             lines.append(f"cofre: {state}, {s.get('total', 0)} credencial(is) visíveis")
@@ -128,7 +125,7 @@ def t_unlock(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     broker.unlock()
     return (
         "cofre destravado neste aparelho (senha e código entraram pelos popups; eu não os vi). "
-        "Tranca sozinho com 3 h sem uso ou ao fechar o Claude."
+        "Tranca sozinho com 2 h sem uso ou ao fechar o Claude."
     )
 
 
@@ -254,7 +251,7 @@ def t_import_env(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     if not args.get("destinations"):
         lines.append(
             "Atenção: sem destinos, nenhuma delas é entregue ainda; o dono diz os destinos no "
-            "portal ou na janela."
+            "portal."
         )
     return "\n".join(lines)
 
@@ -366,8 +363,8 @@ def t_pair(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     state = broker.pair_wait(max(0, min(int(300 if wait is None else wait), 600)))
     if state == "aprovado":
         return (
-            "aparelho vinculado. Próximo passo: configure o cofre (1ª vez) ou destrave, pela "
-            "janela (`open_window`) ou com `unlock`."
+            "aparelho vinculado. Próximo passo: `setup` (1ª vez: senha do cofre e kit por "
+            "popup) ou `unlock`."
         )
     if state == "pendente":
         return (
@@ -378,25 +375,12 @@ def t_pair(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     return "o código venceu ou foi recusado: chame `pair` de novo para pedir outro."
 
 
-def _spawn(args: list[str]) -> None:
-    """Sobe um processo solto do broker (a janela), sem herdar o stdio do MCP."""
-    kwargs: dict[str, Any] = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-    }
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED | NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-    subprocess.Popen(args, **kwargs)  # noqa: S603 (o próprio broker, sem shell)
-
-
-def t_open_window(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
-    _spawn([sys.executable, "-m", "cofre_broker.cli", "window"])
+def t_setup(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
+    broker.configure()
     return (
-        "janela do cofre aberta (pode ter ficado atrás de outra). Nela: situação, destravar, "
-        "vincular, configurar, cadastrar e auditoria. Valores só são digitados lá, nunca aqui."
+        "cofre configurado e destravado: a senha, o kit de recuperação e o código foram só por "
+        "popup (eu não vi nenhum). Para cadastrar, use `store` com os dados do chat; o popup pede "
+        "só o valor."
     )
 
 
@@ -419,7 +403,7 @@ HANDLERS: dict[str, Handler] = {
     "ssh_run": t_ssh_run,
     "ssh_run_script": t_ssh_run_script,
     "pair": t_pair,
-    "open_window": t_open_window,
+    "setup": t_setup,
     "approvals": t_approvals,
 }
 
@@ -455,7 +439,7 @@ _DESTINATIONS = {
             "target": {
                 "type": "string",
                 "description": "nome do comando (ambiente) ou do consumidor (mcp); alvo '*', "
-                "digitar e copiar só o dono define (portal ou janela)",
+                "digitar e copiar só o dono define (no portal)",
             },
         },
         "required": ["via", "target"],
@@ -694,10 +678,11 @@ SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "open_window",
+        "name": "setup",
         "inputSchema": _NO_ARGS,
-        "description": "Abre a janela do cofre no computador do usuário: situação, destravar, "
-        "vincular, configurar a senha do cofre e o kit, cadastrar e auditoria.",
+        "description": "Configura o cofre na 1ª vez, só por popups: a pessoa cria a senha do "
+        "cofre (duas vezes), vê o kit de recuperação uma vez e digita o código do autenticador. "
+        "Você não recebe nada disso.",
     },
     {
         "name": "approvals",

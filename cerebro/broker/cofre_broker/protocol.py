@@ -14,6 +14,7 @@ O formato do fio (chaves JSON em pt-BR, contextos e assinatura) é o de `cerebro
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import secrets
@@ -22,11 +23,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from argon2.low_level import Type, hash_secret_raw
+from cryptography import x509
 from cryptography.hazmat.primitives import hpke
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
@@ -135,9 +139,42 @@ def derive(password: str, salt: bytes, params: dict[str, Any]) -> bytes:
     )
 
 
+def tls_context() -> ssl.SSLContext:
+    """Contexto HTTPS que confere o certificado do servidor com as raízes do sistema.
+
+    No Windows o Python carrega os repositórios ROOT e CA do sistema e, ao montar a cadeia,
+    prefere o certificado que está neles ao que o servidor manda. Um intermediário vencido
+    esquecido no repositório (caso real em 2026-11-11: o cruzamento antigo "ISRG Root X2
+    emitido por ISRG Root X1", vencido em 15/09/2025) derruba a conexão com "certificate has
+    expired" mesmo com a cadeia do servidor válida. Por isso, no Windows, os certificados do
+    sistema entram um a um e os vencidos ficam de fora; nos outros sistemas vale o padrão.
+    """
+    if not hasattr(ssl, "enum_certificates"):
+        return ssl.create_default_context()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)  # confere nome e cadeia por padrão
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    agora = datetime.now(UTC)
+    for loja in ("ROOT", "CA"):
+        for der, codificacao, uso in ssl.enum_certificates(loja):
+            if codificacao != "x509_asn":
+                continue
+            if uso is not True and ssl.Purpose.SERVER_AUTH.oid not in uso:
+                continue  # mesmo filtro do Python: só o que serve para autenticar servidor
+            try:
+                with warnings.catch_warnings():  # certificados antigos com número de série negativo
+                    warnings.simplefilter("ignore")
+                    if x509.load_der_x509_certificate(der).not_valid_after_utc < agora:
+                        continue
+            except ValueError:
+                pass  # ilegível para o cryptography: o OpenSSL decide
+            with contextlib.suppress(ssl.SSLError):  # o que o OpenSSL não aceita fica de fora
+                context.load_verify_locations(cadata=der)
+    return context
+
+
 def http_transport(base: str, *, timeout: float = 20.0) -> Transport:
-    """HTTPS com verificação de certificado (padrão do sistema)."""
-    context = ssl.create_default_context()
+    """HTTPS com verificação de certificado (raízes do sistema, sem as vencidas)."""
+    context = tls_context()
 
     def send(
         method: str, path: str, headers: dict[str, str], body: bytes
@@ -394,7 +431,11 @@ class Client:
         """Libera entregas com o código do autenticador que a pessoa digitou no popup: cada item
         é o par (credencial, via, alvo). 'sempre' vale para a entrega seguinte; 'sessao', até
         trancar. Código errado: VaultClientError com status 403."""
-        wire = [{"id": int(i["id"]), "via": str(i["via"]), "alvo": str(i["alvo"])} for i in items]
+        wire = [
+            {"id": int(i["id"]), "via": str(i["via"]), "alvo": str(i["alvo"])}
+            | ({"programa": str(i["programa"])} if i.get("programa") else {})  # aprova o programa
+            for i in items
+        ]
         answer = self._call("confirmar", lambda t: {"codigo": code, "itens": wire}, session=True)[1]
         return int(answer.get("confirmadas", 0))
 
@@ -416,12 +457,14 @@ class Client:
         )[1]
         return int(answer.get("aprovadas", 0))
 
-    def deliver(self, ref: str, via: str, target: str) -> Delivery:
+    def deliver(self, ref: str, via: str, target: str, program: str | None = None) -> Delivery:
         """O valor de uma credencial, aberto aqui; quem chama injeta no destino e esquece.
-        Sem confirmação válida no servidor: ConfirmationRequired (HTTP 428)."""
-        timestamp, answer = self._call(
-            "entregar", lambda t: {"ref": ref, "via": via, "alvo": target}, session=True
-        )
+        Sem confirmação válida no servidor: ConfirmationRequired (HTTP 428). `program`: na via
+        `mcp`, a impressão do processo que pediu (o servidor confere com as aprovadas)."""
+        body = {"ref": ref, "via": via, "alvo": target}
+        if program:
+            body["programa"] = program
+        timestamp, answer = self._call("entregar", lambda t: dict(body), session=True)
         item = int(answer["credencial"]["id"])
         return Delivery(self._open(item, timestamp, answer["valor_selado"]), answer["credencial"])
 

@@ -2,11 +2,11 @@
 
 Junta o cliente do protocolo (`protocol.py`), a guarda das chaves (`keystore.py`) e os destinos
 locais (`platform_io.py`): digitar, copiar, o ambiente de um comando e os outros MCPs pelo canal
-local. Quem chama (as ferramentas do MCP, a janela, o canal) recebe só metadados; o valor vai
+local. Quem chama (as ferramentas do MCP, o canal) recebe só metadados; o valor vai
 direto ao destino e é esquecido.
 
 Garantias daqui:
-- o valor nunca entra por argumento de ferramenta: vem do popup mascarado, da janela ou é gerado;
+- o valor nunca entra por argumento de ferramenta: vem do popup mascarado ou é gerado;
 - a entrega usa a via certa e o alvo certo (`run`: o nome do comando, que vem do PATH; `mcp`: o
   consumidor; digitar e copiar: `*`), e quem decide se o destino vale é o servidor (lista
   fechada);
@@ -248,7 +248,7 @@ class Broker:
             if self._client is None:
                 raise BrokerError(
                     "este aparelho ainda não está vinculado ao cofre: use a ferramenta `pair` "
-                    "ou a janela (`open_window`)"
+                    "ou o `setup` (1ª vez)"
                 )
             return self._client
 
@@ -282,7 +282,7 @@ class Broker:
             return self._pending_view(new=True)
 
     def _pending_view(self, *, new: bool) -> dict[str, Any]:
-        """Código, link e impressões: só para a janela, o popup e o aviso nativo. A ferramenta
+        """Código, link e impressões: só para o popup e o aviso nativo. A ferramenta
         `pair` não devolve nada disso ao modelo (ele poderia mandar o código para fora)."""
         pending = self._pending or {}
         link = pending.get("link", "")
@@ -339,8 +339,38 @@ class Broker:
 
     # ---------- senha do cofre ----------
 
+    def configure(self) -> dict[str, Any]:
+        """1ª vez, só por popups (sem janela nem formulário): a senha do cofre duas vezes, o kit
+        de recuperação mostrado uma vez num aviso, e o código do autenticador. Nada volta ao
+        Claude além de "configurado"."""
+        ask = "Crie a senha do cofre (mínimo de 12 caracteres; o Claude não vê o que você digitar):"
+        for _ in range(3):
+            first = self.ui.prompt_secret(TITLE, ask)
+            if not first:
+                raise BrokerError("configuração cancelada: nada foi criado")
+            second = self.ui.prompt_secret(TITLE, "Repita a senha do cofre:")
+            if second == first and len(first) >= 12:
+                break
+            ask = ("As duas senhas não conferem ou têm menos de 12 caracteres. Crie a senha do "
+                   "cofre de novo:")  # fmt: skip
+        else:
+            raise BrokerError("configuração cancelada: a senha não conferiu 3 vezes")
+        kit = self.setup(first)
+        first = second = ""
+        aviso = (
+            "Kit de recuperação do cofre (aparece só agora; serve se você esquecer a senha):\n\n"
+            f"{kit}\n\nAnote ou guarde longe do computador e do Claude. Clique OK quando tiver "
+            "guardado."
+        )
+        while not self.ui.confirm(TITLE, aviso):
+            if self.ui.confirm(TITLE, "O kit não aparece de novo. Fechar mesmo assim?"):
+                break
+        kit = ""
+        self._session_code(self.client())
+        return {"configured": True, "unlocked": True}
+
     def setup(self, password: str) -> str:
-        """Cria o cofre da conta e já destrava. Devolve o kit (a janela mostra uma vez)."""
+        """Cria o cofre da conta e já destrava. Devolve o kit (o `configure` mostra uma vez)."""
         client = self.client()
         with self._lock:
             kit = client.setup(password)
@@ -365,7 +395,7 @@ class Broker:
         return {"unlocked": True}
 
     def _relocking(self, call: Callable[[], Any]) -> Any:
-        """Roda `call`; se o servidor disser que a sessão acabou (portal reiniciado, 3 h sem uso),
+        """Roda `call`; se o servidor disser que a sessão acabou (portal reiniciado, 2 h sem uso),
         destrava de novo (senha + código) e tenta uma vez."""
         try:
             return call()
@@ -382,12 +412,12 @@ class Broker:
 
     def _session_code(self, client: Client) -> None:
         """Logo depois da senha, o código de 6 dígitos uma vez só: o servidor passa a confiar
-        nesta sessão até trancar (3 h sem uso ou o Claude fechar). Cancelar não desfaz o
+        nesta sessão até trancar (2 h sem uso ou o Claude fechar). Cancelar não desfaz o
         destrave: o código volta a ser pedido na primeira entrega."""
         try:
             self._with_code(
                 "Cofre destravado. Para terminar de autenticar, digite o código de 6 dígitos do "
-                "app autenticador (uma vez só: vale até fechar o Claude ou ficar 3 h sem uso; "
+                "app autenticador (uma vez só: vale até fechar o Claude ou ficar 2 h sem uso; "
                 "o Claude não vê).",
                 lambda code: client.confirm(code, []),
                 "código cancelado: será pedido na primeira entrega",
@@ -489,16 +519,7 @@ class Broker:
         client = self.client()
         share_pairs = [[int(s["id"]), int(s["usuario_id"])] for s in shares]
         team_pairs = [[int(t["time"]), int(t["usuario_id"])] for t in teams]
-        if self.trusted():
-            box = message.split("\n\nDigite o código")[0] + "\n\nAprovar tudo?"
-            if not self.ui.confirm(TITLE, box):
-                C.log("aprovação cancelada: segue pendente")
-                return 0
-            try:
-                return int(client.approve("", share_pairs, team_pairs))
-            except VaultClientError as exc:
-                C.log(f"pendências não aprovadas: {exc}")
-                return 0
+        # dar acesso a outra pessoa pede o código sempre (uma caixa de OK o agente clicaria)
         try:
             return int(
                 self._with_code(
@@ -526,7 +547,7 @@ class Broker:
             "channel": self.channel_state,
             "pid": os.getpid(),
         }
-        if self._pending:  # sem o código: ele só aparece no popup e na janela
+        if self._pending:  # sem o código: ele só aparece no popup
             found["pairing"] = {"pending": True, "expires": self._pending.get("expires")}
         try:
             client = self.client()
@@ -560,7 +581,7 @@ class Broker:
     def _value(self, path: str, value: str | None, generate: bool, length: int) -> str:
         if generate:
             return generate_secret(length)
-        if value is not None:  # só a janela manda o valor (pelo canal autenticado)
+        if value is not None:  # import do .env e testes; o MCP nunca manda valor
             return value
         found = self.ui.prompt_secret(
             TITLE, f"Valor para '{path}' (o Claude não vê o que você digitar):"
@@ -667,27 +688,28 @@ class Broker:
 
     # ---------- entrega (o valor sai daqui direto para o destino) ----------
 
-    def _fetch(self, ref: str, via: str, target: str) -> Delivery:
+    def _fetch(self, ref: str, via: str, target: str, program: str | None = None) -> Delivery:
         """Uma entrega. ConfirmationRequired (428) sobe para quem chamou juntar num popup só."""
         client = self.client()
         if not client.session:
             self.unlock()
         try:
-            delivery = client.deliver(ref, via, target)
+            delivery = client.deliver(ref, via, target, program)
         except ConfirmationRequired:
             raise
         except VaultClientError as exc:
             if exc.status != 401 or client.session is not None:
                 raise
             self.unlock()  # a sessão venceu no servidor: destrava e tenta uma vez
-            delivery = client.deliver(ref, via, target)
+            delivery = client.deliver(ref, via, target, program)
         self._note(delivery.value)
         return delivery
 
     def _entries_for(self, refs: list[str], via: str, target: str) -> list[dict[str, Any]]:
         """Metadados das credenciais (para confirmar antes da 1ª entrega). O destino é conferido
         aqui só para não pedir o código à toa: quem decide é o servidor, na entrega."""
-        listed = self.client().list()
+        # sessão que o servidor esqueceu (portal reiniciado): destrava de novo e tenta uma vez
+        listed = self._relocking(lambda: self.client().list())
         by_ref = {str(e["caminho"]).lower(): e for e in listed} | {str(e["id"]): e for e in listed}
         found = []
         for ref in refs:
@@ -701,7 +723,7 @@ class Broker:
             if not allowed:
                 raise BrokerError(
                     f"destino {via}:{target} não permitido para {entry['caminho']} (o dono "
-                    "define os destinos no portal ou na janela)"
+                    "define os destinos no portal)"
                 )
             found.append(entry)
         return found
@@ -715,12 +737,14 @@ class Broker:
         *,
         force: bool = False,
         skip_refused: bool = False,
+        program: str | None = None,
     ) -> tuple[dict[str, Delivery], list[str]]:
         """Entrega {nome: caminho} pela via e alvo dados. O que o servidor segurar (428) vira um
         popup só, com o código do autenticador, e é pedido de novo uma vez. Com `force`, o
-        código vem antes da 1ª entrega, mesmo com a política 'livre'. Numa sessão de confiança
-        (código já digitado no destrave) o servidor não segura nada: no máximo uma caixa de OK,
-        para o pedido inteiro, se houver credencial 'sempre' (ou `force`)."""
+        código vem antes da 1ª entrega, mesmo com a política 'livre'. Depois do código (a
+        sessão de confiança, que vale 2 h sem uso e renova a cada uso), o servidor não segura
+        mais nada: copiar, digitar, intérprete e 'sempre' mostram só a caixa de autorização,
+        uma para o pedido inteiro (decisão do Augusto, 2026-11-12)."""
         client = self.client()
         if not client.session:
             self.unlock()
@@ -741,7 +765,7 @@ class Broker:
         held: dict[str, dict[str, Any]] = {}
         for name, path in sorted(wanted.items()):
             try:
-                done[name] = self._fetch(path, via, target)
+                done[name] = self._fetch(path, via, target, program)
             except ConfirmationRequired as exc:
                 held[name] = exc.request or {"caminho": path}
             except VaultClientError as exc:
@@ -757,6 +781,7 @@ class Broker:
                 "via": r.get("via") or via,
                 "alvo": r.get("alvo") or target,
             }
+            | ({"programa": r["programa"]} if r.get("programa") else {})
             for n, r in held.items()
         ]
         if any(not i["id"] or i["id"] in confirmed for i in items):
@@ -764,7 +789,7 @@ class Broker:
         self.confirm_with_code(items, head)
         for name in sorted(held):
             try:
-                done[name] = self._fetch(wanted[name], via, target)
+                done[name] = self._fetch(wanted[name], via, target, program)
             except ConfirmationRequired as exc:
                 raise BrokerError(
                     "o servidor segue pedindo confirmação depois do código: nada foi entregue"
@@ -774,15 +799,16 @@ class Broker:
     def _authorize(
         self, wanted: dict[str, str], via: str, target: str, head: str, *, force: bool
     ) -> None:
-        """Caixa de OK (sem código) antes de entregar credenciais 'sempre' numa sessão de
-        confiança. Destinos recusados não entram na lista: o servidor recusa na entrega."""
-        if force:  # digitar e intérprete: destino conferido antes, sem nem perguntar
+        """Caixa de autorização (sem código) numa sessão de confiança, antes de copiar, digitar,
+        rodar intérprete (`force`) ou entregar credencial 'sempre'. Destinos recusados não
+        entram na lista: o servidor recusa na entrega."""
+        items: list[dict[str, Any]] = []
+        if force:  # copiar, digitar e intérprete: destino conferido antes, sem nem perguntar
             entries = self._entries_for(sorted(set(wanted.values())), via, target)
             items = [{"caminho": e["caminho"], "via": via, "alvo": target} for e in entries]
             wanted = {}
         listed = self.client().list() if wanted else []
         by_ref = {str(e["caminho"]).lower(): e for e in listed}
-        items = items if force else []
         for path in sorted(set(wanted.values())):
             entry = by_ref.get(str(path).strip().strip("/").lower())
             if entry is None:
@@ -791,7 +817,7 @@ class Broker:
                 d.get("via") == via and d.get("alvo") in ("*", target)
                 for d in entry.get("destinos") or []
             )
-            if allowed and (force or entry.get("confirmacao") == "sempre"):
+            if allowed and entry.get("confirmacao") == "sempre":
                 items.append({"caminho": entry["caminho"], "via": via, "alvo": target})
         if not items:
             return
@@ -814,9 +840,13 @@ class Broker:
                 found[rest] = path
         return found
 
-    def deliver_group(self, group: str, consumer: str) -> dict[str, str]:
+    def deliver_group(
+        self, group: str, consumer: str, program: tuple[str, str] | None = None
+    ) -> dict[str, str]:
         """O que o `cofre_client`/`cofre_run` pedem pelo canal: NOME→valor do grupo, entregue com
-        via `mcp` e alvo = consumidor. Entradas sem esse destino ficam de fora."""
+        via `mcp` e alvo = consumidor. Entradas sem esse destino ficam de fora. `program`:
+        (impressão, descrição) do processo que pediu, visto pelo kernel; o servidor só entrega
+        a um programa que a pessoa aprovou com o código."""
         group = check_group(group)
         consumer = str(consumer or "").strip()
         if not _CONSUMER.fullmatch(consumer):
@@ -825,13 +855,15 @@ class Broker:
             names = self._group_entries(group)
             if not names:
                 raise BrokerError(f"grupo '{group}' vazio ou inexistente no cofre")
+            desc = program[1] if program else "não identificado"
             deliveries, refused = self._deliver_all(
                 names,
                 "mcp",
                 consumer,
                 f"Entregar credenciais do grupo '{group}' ao processo '{consumer}' (outro MCP "
-                "desta máquina).",
+                f"desta máquina).\n\nPrograma: {desc}\nSe não reconhece este programa, cancele.",
                 skip_refused=True,
+                program=program[0] if program else None,
             )
             if not deliveries:
                 raise BrokerError(f"nenhuma credencial de '{group}' tem o destino mcp:{consumer}")
@@ -855,11 +887,12 @@ class Broker:
         return {"path": delivery.credential.get("caminho", ref)}
 
     def copy(self, ref: str) -> dict[str, Any]:
-        """Copia pela política do dono (o servidor pede o código quando ela manda)."""
+        """Copia com o código do autenticador a cada vez: a área de transferência é legível
+        por qualquer processo do usuário, inclusive o agente."""
         ttl = C.clip_ttl()
         with self._deliver_lock:
             head = f"Copiar o valor de '{ref}' para a área de transferência por {ttl} s."
-            done, _ = self._deliver_all({"valor": ref}, "copiar", "*", head)
+            done, _ = self._deliver_all({"valor": ref}, "copiar", "*", head, force=True)
             delivery = done["valor"]
             self.ui.copy_clipboard(delivery.value.decode("utf-8"), ttl)
         return {"path": delivery.credential.get("caminho", ref), "ttl": ttl}

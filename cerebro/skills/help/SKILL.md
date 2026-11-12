@@ -14,5 +14,5 @@ Responda no idioma do usuário com esta tabela, exatamente nesta ordem, e nada m
 | `/cerebro:exportar` | exporta o cérebro inteiro em .zip (notas, histórico e manifesto) | para guardar uma cópia sua ou levar para o Obsidian |
 | `/cerebro:instalar` | prepara este Claude para o cérebro (bloco no CLAUDE.md, com backup e ok) | na primeira vez num Claude, ou para revisar outras memórias |
 | `/cerebro:desinstalar` | desfaz o que o instalar fez | para tirar o cérebro deste Claude |
-| `/cerebro:cofre` | cofre de senhas: janela, vincular, configurar; valor nunca na conversa | para vincular este aparelho, criar a senha do cofre ou cadastrar credenciais |
+| `/cerebro:cofre` | cofre de senhas só com popups: vincular, configurar, destravar; valor nunca na conversa | para vincular este aparelho, criar a senha do cofre ou cadastrar credenciais |
 | `/cerebro:help` | esta tabela: todos os comandos do cérebro e o que cada um faz | quando quiser lembrar o que existe |

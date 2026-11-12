@@ -77,7 +77,7 @@ var regrasDoTodo = []regra{
 
 const mensagemDaGuarda = "Bloqueado pelo cofre do cérebro: %s. O Claude nunca lê segredo cru. Use as " +
 	"ferramentas do MCP `cofre` (`inject` digita, `copy` copia, `run` põe no ambiente de um " +
-	"comando com a saída mascarada); para cadastrar, `store` (popup) ou a janela (`open_window`).\n"
+	"comando com a saída mascarada); para cadastrar, `store` (os dados do chat, o valor no popup).\n"
 
 // motivo do bloqueio, ou "" se o comando pode rodar
 func conferir(comando string) string {
@@ -97,6 +97,30 @@ func conferir(comando string) string {
 	return ""
 }
 
+// as ferramentas de arquivo do Claude (Read, Grep, Edit, Write…) não passam pelo terminal: a
+// guarda também confere o caminho delas
+var (
+	pastaDoCofre   = regexp.MustCompile(`(?i)[/\\]\.claude[/\\]cofre(?:[/\\]|$)|broker\.(?:key|sock)\b|cofre-device-keys\b`)
+	codigoDoPlugin = regexp.MustCompile(`(?i)[/\\]\.claude[/\\]plugins[/\\](?:cache[/\\]cerebro-vivo|data[/\\]cerebro-)`)
+	escritores     = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
+)
+
+// motivo do bloqueio de uma ferramenta de arquivo, ou ""
+func conferirArquivo(ferramenta string, caminhos ...string) string {
+	for _, c := range caminhos {
+		if c == "" {
+			continue
+		}
+		if pastaDoCofre.MatchString(c) {
+			return "a pasta do broker do cofre guarda a chave do canal e o socket (entregam valores em claro)"
+		}
+		if escritores[ferramenta] && codigoDoPlugin.MatchString(c) {
+			return "o código e o ambiente do broker instalado não se alteram por aqui (um broker alterado pularia a confirmação)"
+		}
+	}
+	return ""
+}
+
 // lê o JSON do hook; barra com código 2 e a explicação no stderr
 func guarda(entrada io.Reader, erro io.Writer) int {
 	dado, err := io.ReadAll(entrada)
@@ -104,14 +128,26 @@ func guarda(entrada io.Reader, erro io.Writer) int {
 		return 0
 	}
 	var evento struct {
+		ToolName  string `json:"tool_name"`
 		ToolInput struct {
-			Command any `json:"command"`
+			Command      any    `json:"command"`
+			FilePath     string `json:"file_path"`
+			NotebookPath string `json:"notebook_path"`
+			Path         string `json:"path"`
+			Pattern      string `json:"pattern"`
+			Glob         string `json:"glob"`
 		} `json:"tool_input"`
 	}
 	if json.Unmarshal(dado, &evento) != nil {
 		return 0 // não é conosco
 	}
-	comando, ok := evento.ToolInput.Command.(string)
+	in := evento.ToolInput
+	if motivo := conferirArquivo(evento.ToolName, in.FilePath, in.NotebookPath, in.Path,
+		map[bool]string{true: in.Pattern}[evento.ToolName == "Glob"], in.Glob); motivo != "" {
+		fmt.Fprintf(erro, mensagemDaGuarda, motivo)
+		return 2
+	}
+	comando, ok := in.Command.(string)
 	if !ok {
 		return 0
 	}

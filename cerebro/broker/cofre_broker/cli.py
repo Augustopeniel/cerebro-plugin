@@ -1,7 +1,6 @@
 """`cerebro-cofre`: o broker local do cofre do cérebro.
 
 cerebro-cofre mcp      servidor MCP stdio (o que o plugin registra como `cofre`)
-cerebro-cofre window   janela do cofre (situação, destravar, vincular, configurar…)
 cerebro-cofre pair     vincula este aparelho (código e impressões num aviso na tela; espera)
 cerebro-cofre status   situação do cofre neste aparelho, sem segredo
 cerebro-cofre migrate-kdbx [--apply]   migra o cofre KeePass antigo (ensaio por padrão)
@@ -65,7 +64,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cerebro-cofre", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("mcp", help="servidor MCP stdio")
-    sub.add_parser("window", help="janela do cofre")
     pair = sub.add_parser("pair", help="vincular este aparelho")
     pair.add_argument("--name", default=None, help="nome do aparelho")
     pair.add_argument("--wait", type=int, default=600, help="segundos esperando (padrão 600)")
@@ -98,10 +96,6 @@ def main(argv: list[str] | None = None) -> int:
 
             serve()
             return 0
-        if args.command == "window":
-            from .window import main as window
-
-            return window()
         if args.command == "pair":
             return _pair(args)
         if args.command == "migrate-kdbx":

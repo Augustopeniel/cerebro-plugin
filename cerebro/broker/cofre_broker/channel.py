@@ -1,4 +1,4 @@
-"""Canal local: por onde os outros MCPs, a janela e as outras sessões do Claude falam com o broker.
+"""Canal local: por onde os outros MCPs e as outras sessões do Claude falam com o broker.
 
 O mesmo endereço e o mesmo protocolo do broker antigo, para o `cofre_client.py` e o `cofre_run.py`
 seguirem funcionando sem mudar uma linha:
@@ -13,7 +13,7 @@ Uma linha JSON por conexão:
   erro → {"ok": false, "error": "..."}
 
 `env` é o de sempre (a entrega com via `mcp` e alvo = consumidor; o servidor decide se vale).
-`admin` é o que a janela e as outras sessões usam (destravar, gravar, chamar uma ferramenta…): vai
+`admin` é o que as outras sessões e a linha de comando usam (estado, vincular, ferramenta…): vai
 autenticado com HMAC-SHA256 pela chave do canal, com hora (60 s) e número único (sem repetição).
 
 Só um broker atende: se o endereço já responde (o antigo rodando, ou outra sessão), este não
@@ -31,6 +31,7 @@ import os
 import re
 import secrets
 import socket
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -41,31 +42,15 @@ from pathlib import Path
 from typing import Any
 
 from . import config as C
+from . import peer as PEER
 from .broker import Broker, BrokerError
 from .protocol import VaultClientError
 
 MAX_REQUEST = 256 * 1024
 ADMIN_WINDOW_S = 60
-# o que a janela e as outras sessões podem pedir (nada aqui devolve valor de credencial; o kit
-# volta só para a janela, uma vez, no `setup`)
-ADMIN_ACTIONS = frozenset(
-    {
-        "state",
-        "unlock",
-        "lock",
-        "pair_start",
-        "pair_poll",
-        "setup",
-        "list_entries",
-        "store",
-        "replace",
-        "archive",
-        "restore",
-        "move",
-        "events",
-        "tool",
-    }
-)
+# o que outras sessões e a linha de comando (`pair`, `status`) podem pedir: nada recebe senha nem
+# valor, nada devolve kit (a janela, que mandava senha e valor por aqui, saiu na 2.7.0)
+ADMIN_ACTIONS = frozenset({"state", "lock", "pair_start", "pair_poll", "tool"})
 
 ToolRunner = Callable[[str, dict[str, Any], str | None], dict[str, Any]]
 
@@ -116,6 +101,16 @@ def admin_request(key: bytes, action: str, **args: Any) -> dict[str, Any]:
     }
 
 
+def _broker_process(peer: PEER.Peer | None) -> bool:
+    """O broker de outra sessão ou a linha de comando: o mesmo Python (de verdade) rodando
+    `-m cofre_broker.cli mcp|pair|status`, sem variável que injete código."""
+    return bool(
+        peer is not None
+        and peer.exe == os.path.realpath(sys.executable)
+        and peer.is_module("cofre_broker.cli", frozenset({"mcp", "pair", "status"}))
+    )
+
+
 def _alive(path: Path) -> bool:
     probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     probe.settimeout(1.0)
@@ -130,9 +125,14 @@ def _alive(path: Path) -> bool:
 
 class ChannelServer:
     def __init__(
-        self, broker: Broker, tool_runner: ToolRunner | None = None, retry: float = 5.0
+        self,
+        broker: Broker,
+        tool_runner: ToolRunner | None = None,
+        retry: float = 5.0,
+        admin_peer: Callable[[PEER.Peer | None], bool] | None = None,
     ) -> None:
         self.broker, self.tool_runner, self.retry = broker, tool_runner, retry
+        self.admin_peer = admin_peer or _broker_process
         self.owner = False
         self._seen: dict[str, float] = {}
         self._seen_lock = threading.Lock()
@@ -147,14 +147,24 @@ class ChannelServer:
 
     # ---------- resposta (igual nos dois canais) ----------
 
-    def respond(self, data: bytes) -> bytes:
+    def respond(self, data: bytes, peer: PEER.Peer | None = None, checked: bool = False) -> bytes:
+        """`peer`: o processo do outro lado, visto pelo kernel; `checked`: o canal sabe dizer
+        quem é (socket Unix no macOS/Linux). No named pipe do Windows, `checked` é falso."""
         try:
             request = json.loads(data.decode("utf-8"))
             if not isinstance(request, dict):
                 raise BrokerError("pedido inválido")
             op = request.get("op")
             if op == "env":
-                env = self.broker.deliver_group(request.get("group"), request.get("consumer"))
+                if checked and peer is None:
+                    raise BrokerError("não deu para identificar o processo que pediu")
+                program = (
+                    (peer.fingerprint(), peer.describe()) if peer is not None
+                    else (PEER.NO_CHECK, "sem conferência do processo neste sistema")
+                )  # fmt: skip
+                env = self.broker.deliver_group(
+                    request.get("group"), request.get("consumer"), program=program
+                )
                 answer = {"ok": True, "env": env}
             elif op == "hello":
                 answer = {
@@ -162,6 +172,10 @@ class ChannelServer:
                     "result": {"broker": C.NAME, "version": C.VERSION, "pid": os.getpid()},
                 }
             elif op == "admin":
+                if checked and not self.admin_peer(peer):
+                    # a chave do canal fica num arquivo do usuário: além dela, quem pede tem de
+                    # ser o broker de outra sessão do Claude ou a linha de comando do plugin
+                    raise BrokerError("pedido de administração de um processo não autorizado")
                 answer = {"ok": True, "result": self._admin(request)}
             else:
                 raise BrokerError("operacao desconhecida.")
@@ -256,8 +270,10 @@ class ChannelServer:
                 data += part
             if not data.strip():
                 return  # só uma sondagem
+            pid = PEER.peer_pid(conn)
+            who = PEER.identify(pid) if pid else None
             conn.settimeout(None)
-            conn.sendall(self.respond(data))
+            conn.sendall(self.respond(data, who, checked=True))
         except OSError:
             pass
         finally:
@@ -374,7 +390,7 @@ class ChannelServer:
 
 
 class ChannelClient:
-    """Quem fala com o broker que atende: a janela, outra sessão do Claude, os testes."""
+    """Quem fala com o broker que atende: outra sessão do Claude, a linha de comando, os testes."""
 
     def __init__(self, timeout: float = 900) -> None:
         self.timeout = timeout
@@ -445,7 +461,7 @@ class ChannelClient:
 
 
 class RemoteBroker:
-    """O broker de outro processo, pelo canal: a janela usa como se fosse o local."""
+    """O broker de outro processo, pelo canal: a linha de comando usa como se fosse o local."""
 
     def __init__(self, client: ChannelClient | None = None) -> None:
         self._client = client or ChannelClient()
