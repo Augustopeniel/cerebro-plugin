@@ -85,6 +85,10 @@ func (p *perfil) ambienteUV() []string {
 		"UV_NO_CONFIG=1",
 		"CLAUDE_PLUGIN_DATA=" + p.dados,
 	}
+	// o askpass do conector SSH no Windows é este binário (askpass.go)
+	if eu, err := os.Executable(); err == nil {
+		env = append(env, "CEREBRO_LANCADOR="+eu)
+	}
 	var fora []string
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "UV_") && !strings.HasPrefix(kv, "VIRTUAL_ENV=") {

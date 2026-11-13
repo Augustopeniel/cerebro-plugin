@@ -27,8 +27,11 @@ def _error(mid: Any, code: int, message: str) -> dict[str, Any]:
 
 
 class McpServer:
-    def __init__(self, broker: Broker, channel: ChannelServer | None = None) -> None:
+    def __init__(
+        self, broker: Broker, channel: ChannelServer | None = None, background: bool = False
+    ) -> None:
         self.broker, self.channel = broker, channel
+        self.background = background  # há um broker de fundo desta versão para repassar
 
     def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any] | None:
         if name not in T.HANDLERS:
@@ -37,6 +40,10 @@ class McpServer:
         outcome = None
         if name not in T.LOCAL_ONLY and self.channel is not None and not self.channel.owner:
             remote = find_remote()
+            if remote is None and self.background:  # o fundo caiu: sobe de novo e repassa
+                from . import fundo
+
+                remote = find_remote() if fundo.ensure() else None
             if remote is not None:
                 try:
                     outcome = remote.tool(name=name, arguments=args, cwd=cwd)
@@ -108,17 +115,21 @@ def main() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
             reconfigure(encoding="utf-8")
+    from . import fundo
+
+    background = fundo.ensure()  # o cofre aberto vive no broker de fundo, não nesta sessão
     broker = Broker()
     channel = ChannelServer(broker, lambda n, a, cwd: T.call_tool(broker, n, a, cwd))
-    channel.start()
-    channel.wait_owner(1.0)  # o status já sai com o papel certo
-    C.log(f"v{C.VERSION} pronto | {len(T.SCHEMAS)} ferramentas | servidor {broker.url}")
+    if background:  # não disputa o canal com o fundo: se ele cair, a próxima ferramenta o sobe
+        broker.channel_state = "repassa ao broker de fundo"
+    else:
+        channel.start()
+        channel.wait_owner(1.0)  # o status já sai com o papel certo
+    papel = "repassa ao broker de fundo" if background else "atende sozinho"
+    C.log(f"v{C.VERSION} pronto ({papel}) | {len(T.SCHEMAS)} ferramentas | servidor {broker.url}")
     try:
-        McpServer(broker, channel).serve(sys.stdin, sys.stdout)
+        McpServer(broker, channel, background).serve(sys.stdin, sys.stdout)
     finally:
+        # fechar o Claude não tranca (um destrave por dia): o broker de fundo segue com a sessão
         channel.stop()
-        try:  # o Claude fechou: a sessão do cofre acaba junto (autentica de novo ao abrir)
-            broker.lock()
-        except Exception as exc:  # saindo: só registra
-            C.log(f"não trancou ao sair: {exc}")
     C.log("stdin fechado, saindo.")

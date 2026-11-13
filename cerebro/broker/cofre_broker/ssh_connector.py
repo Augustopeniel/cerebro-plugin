@@ -2,7 +2,9 @@
 
 Cada servidor é uma credencial `ssh` com metadados `host`, `porta`, `usuario`, `jump` (caminho de
 outra credencial ssh para saltar), `impressao` (impressão digital da chave do host, `SHA256:…`) e
-`regra`. O valor é a senha ou a chave privada (texto começando por `-----BEGIN`).
+`regra`. O valor é a senha ou a chave privada (texto começando por `-----BEGIN`). Desde a 2.10,
+uma credencial `senha` com a url `ssh://[usuario@]host[:porta]` também é servidor (é como os
+servidores foram cadastrados até aqui): host, porta e usuário saem da url.
 
 Como o segredo chega ao `ssh` sem passar pelo Claude, por disco, por argv ou pelo ambiente (o
 `ps eww` do mesmo usuário mostra o ambiente):
@@ -10,7 +12,10 @@ Como o segredo chega ao `ssh` sem passar pelo Claude, por disco, por argv ou pel
   senha uma vez por conexão, numa thread; o `SSH_ASKPASS` é um script mínimo, sem segredo, que
   só faz `cat` do FIFO do salto cujo prompt casou EXATAMENTE (`usuario@host's password: `).
   Qualquer outro prompt (keyboard-interactive, passphrase, pergunta) não recebe nada. A pasta é
-  apagada no fim. No Windows, por enquanto, só chave;
+  apagada no fim. No Windows (sem FIFO), o askpass é o próprio lançador do plugin
+  (`cerebro-plugin.exe`, sem segredo), que pede a senha por um socket TCP local (127.0.0.1) com
+  um token de uso único desta conexão; o broker só responde ao prompt exato de um salto
+  conhecido, uma vez por conexão;
 - chave: um `ssh-agent` próprio e de vida curta recebe a chave pelo stdin (`ssh-add -t … -`) e
   morre no fim; a chave nunca toca o disco;
 - conexão: um `ssh_config` temporário (sem segredo) com um bloco por salto, porque opções `-o`
@@ -28,12 +33,17 @@ MikroTik core é só leitura): caminho + `print` ou `export` + palavras de uma l
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import errno
+import hmac
+import json
 import os
 import re
+import secrets as _secrets
 import shlex
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -129,12 +139,34 @@ class Target:
         return self.secret.lstrip().startswith(KEY_MARK)
 
 
+def from_url(url: str) -> tuple[str, str, str]:
+    """(usuário, host, porta) de `ssh://[usuario@]host[:porta]`, ignorando o que vier depois do
+    endereço (`ssh://10.1.2.3:22 (servidor X)`). Fora disso, ("", "", "")."""
+    text = str(url or "").strip()
+    if not text.lower().startswith("ssh://"):
+        return "", "", ""
+    rest = re.split(r"[\s/(]", text[6:], maxsplit=1)[0]
+    user, _, hostport = rest.rpartition("@")
+    host, port = hostport, ""
+    if hostport.count(":") == 1:
+        host, port = hostport.split(":")
+    return user, host, port
+
+
+def is_server(entry: dict[str, object]) -> bool:
+    """Credencial que o conector usa: tipo `ssh`, ou `senha` com url `ssh://…`."""
+    if entry.get("tipo") == "ssh":
+        return True
+    return entry.get("tipo") == "senha" and bool(from_url(str(entry.get("url") or ""))[1])
+
+
 def target_from(entry: dict[str, object], secret: bytes, jump: Target | None = None) -> Target:
     """Monta o alvo a partir dos metadados da credencial (`list_entries`) e do valor entregue."""
     name = entry.get("caminho")
-    host = str(entry.get("host") or entry.get("url") or "").strip()
-    user = str(entry.get("usuario") or "").strip()
-    port_text = str(entry.get("porta") or "22").strip()
+    url_user, url_host, url_port = from_url(str(entry.get("url") or ""))
+    host = str(entry.get("host") or url_host or entry.get("url") or "").strip()
+    user = str(entry.get("usuario") or url_user or "").strip()
+    port_text = str(entry.get("porta") or url_port or "22").strip()
     rule = str(entry.get("regra") or "livre").strip()
     fingerprint = str(entry.get("impressao") or "").strip()
     if not _HOST.match(host):
@@ -290,6 +322,99 @@ def write_askpass(folder: str, choices: list[tuple[list[str], str]]) -> str:
     return path
 
 
+def askpass_by_tcp() -> bool:
+    """Windows não tem FIFO: o askpass é o lançador do plugin, pelo socket TCP local. Nos outros
+    sistemas, só com CEREBRO_SSH_ASKPASS=tcp (testes)."""
+    return IS_WINDOWS or os.environ.get("CEREBRO_SSH_ASKPASS") == "tcp"
+
+
+class TcpAskpass:
+    """Servidor de senha para o askpass do lançador (`cerebro-plugin askpass`): escuta só em
+    127.0.0.1, numa porta aleatória, e responde a um pedido {"t": token, "p": prompt} com a senha
+    do salto cujo prompt casar inteiro, uma vez por `armed` (uma conexão ssh). Token errado,
+    prompt desconhecido ou repetido: resposta vazia (o askpass sai com 1)."""
+
+    def __init__(self, chain: list[Target], launcher: str | None = None) -> None:
+        exe = launcher or os.environ.get("CEREBRO_LANCADOR", "")
+        if not exe or not os.path.isfile(exe):
+            raise SshError(
+                "a senha do SSH no Windows usa o lançador do plugin 2.10 ou mais novo: "
+                "atualize o plugin e reinicie o Claude"
+            )
+        self._chain = chain
+        self._token = _secrets.token_urlsafe(24)
+        self._armed: dict[str, bytes] = {}
+        self._lock = threading.Lock()
+        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._server.bind(("127.0.0.1", 0))
+        self._server.listen(4)
+        self._server.settimeout(0.2)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        self.env = {
+            "SSH_ASKPASS": exe,
+            "SSH_ASKPASS_REQUIRE": "force",
+            "CEREBRO_ASKPASS_PORTA": str(self._server.getsockname()[1]),
+            "CEREBRO_ASKPASS_BILHETE": self._token,
+        }
+
+    @contextmanager
+    def armed(self, passwords: dict[int, bytes]) -> Iterator[None]:
+        table = {}
+        for index, secret in passwords.items():
+            for prompt in password_prompts(self._chain[index]):
+                table[prompt] = secret
+        with self._lock:
+            self._armed = table
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._armed = {}
+
+    def _answer(self, raw: bytes) -> bytes:
+        try:
+            asked = json.loads(raw.decode("utf-8"))
+            token, prompt = str(asked["t"]), str(asked["p"]).rstrip()
+        except (ValueError, KeyError, TypeError):
+            return b"{}"
+        if not hmac.compare_digest(token, self._token):
+            return b"{}"
+        with self._lock:
+            secret = self._armed.pop(prompt, None)
+            if secret is not None:  # uma vez por conexão: as variantes do mesmo salto saem juntas
+                self._armed = {k: v for k, v in self._armed.items() if v is not secret}
+        if secret is None:
+            return b"{}"
+        return json.dumps({"b": base64.b64encode(secret).decode()}).encode()
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                conn, _ = self._server.accept()
+            except (TimeoutError, OSError):
+                continue
+            with conn:
+                conn.settimeout(5)
+                data = b""
+                try:
+                    while b"\n" not in data and len(data) < 8192:
+                        part = conn.recv(4096)
+                        if not part:
+                            break
+                        data += part
+                    conn.sendall(self._answer(data.split(b"\n")[0]) + b"\n")
+                except OSError:
+                    pass
+
+    def close(self) -> None:
+        self._stop.set()
+        with contextlib.suppress(OSError):
+            self._server.close()
+        self._thread.join(timeout=2)
+
+
 def _feed(path: str, secret: bytes, stop: threading.Event) -> None:
     """Espera alguém abrir o FIFO para leitura (o askpass), escreve a senha uma vez e apaga o
     FIFO: um 2º pedido na mesma conexão não acha nada."""
@@ -416,57 +541,91 @@ def run(
     mask: Callable[[str], str] = lambda s: s,
     runner: Runner = subprocess.run,
     keygen: str = "ssh-keygen",
+    sudo: bool = False,
+    probe_only: bool = False,
 ) -> Result:
-    """Roda `command` no alvo (com saltos). Saída e erro já passam pela máscara."""
+    """Roda `command` no alvo (com saltos). Saída e erro já passam pela máscara. `sudo`: roda
+    como root com a senha do próprio servidor (pelo stdin, nunca na linha de comando).
+    `probe_only`: só a sonda até o último salto, para ver a chave dele (sem segredo para ele):
+    `host_keys` traz a impressão vista, mesmo sem nenhuma fixada."""
     check_rule(target, command, script=script)
     chain = hops(target)
     # só autentica quem tem segredo: os saltos depois do 1º sem impressão chegam com b"" e a
     # sonda para antes deles
     passwords = {i: h.secret for i, h in enumerate(chain) if h.secret and not h.uses_key}
-    if passwords and IS_WINDOWS:
-        raise SshError(
-            "no Windows o conector, por enquanto, só usa chave: grave a chave privada na "
-            "credencial ssh em vez da senha"
-        )
+    if sudo:
+        last = chain[-1]
+        if not last.secret or last.uses_key:
+            raise SshError(f"{last.ref}: sudo usa a senha do servidor, e esta credencial é chave")
+        if script or stdin:
+            raise SshError("sudo vale para um comando, sem script e sem stdin")
+        if target.rule != "livre":
+            raise SshError(f"{target.ref}: host só de leitura não aceita sudo")
+        # -k: pede a senha sempre (sem o cache do sudo); a senha entra pelo stdin do ssh e o
+        # comando roda com o stdin em /dev/null: nem com NOPASSWD a senha chega ao comando
+        inner = "exec </dev/null; " + command
+        command = f"sudo -k -S -p '' -- sh -c {shlex.quote(inner)}"
+        stdin = last.secret.decode("utf-8", "replace") + "\n"
     ssh = shutil.which("ssh") or "ssh"
+    tcp = TcpAskpass(chain) if passwords and askpass_by_tcp() else None
     with tempfile.TemporaryDirectory(prefix="cerebro-ssh-") as folder:
         os.chmod(folder, 0o700)  # nome aleatório (mkdtemp) e só para este usuário
         known = os.path.join(folder, "known_hosts")
         env = dict(os.environ)
-        if passwords:
-            choices = [(password_prompts(chain[i]), fifo_path(folder, i)) for i in passwords]
-            env.update(
-                SSH_ASKPASS=write_askpass(folder, choices),
-                SSH_ASKPASS_REQUIRE="force",
-                DISPLAY=env.get("DISPLAY") or "none:0",
-            )
+        env.pop("CEREBRO_ASKPASS_BILHETE", None)
+        if tcp is not None:
+            env.update(tcp.env, DISPLAY=env.get("DISPLAY") or "none:0")
+            feed = tcp.armed
+        else:
+            if passwords:
+                choices = [(password_prompts(chain[i]), fifo_path(folder, i)) for i in passwords]
+                env.update(
+                    SSH_ASKPASS=write_askpass(folder, choices),
+                    SSH_ASKPASS_REQUIRE="force",
+                    DISPLAY=env.get("DISPLAY") or "none:0",
+                )
+
+            def feed(chosen: dict[int, bytes]):
+                return password_feed(folder, chosen)
+
         keys = [h.secret for h in chain if h.uses_key]
-        with agent_with_keys(keys, folder) as sock:
-            seen = _verify_host_keys(
-                chain, folder, known, ssh, runner, keygen, env, sock, passwords
-            )
-            config = write_config(
-                chain, folder, known_hosts=known, strict=[True] * len(chain), agent_sock=sock
-            )
-            args = [ssh, "-F", config, alias(len(chain) - 1), command]
-            try:
-                with password_feed(folder, passwords):
-                    p = runner(
-                        args,
-                        input=stdin,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=timeout,
-                        env=env,
-                        check=False,
-                    )
-            except subprocess.TimeoutExpired:
-                return Result(124, "", f"tempo esgotado depois de {timeout}s", seen)
-            except FileNotFoundError as exc:
-                raise SshError("ssh (OpenSSH) não encontrado no PATH") from exc
-    return Result(p.returncode, mask(p.stdout or ""), mask(p.stderr or ""), seen)
+        try:
+            with agent_with_keys(keys, folder) as sock:
+                seen = _verify_host_keys(
+                    chain, folder, known, ssh, runner, keygen, env, sock, passwords, feed=feed,
+                    probe_last=probe_only,
+                )
+                if probe_only:
+                    return Result(0, "", "", seen)
+                config = write_config(
+                    chain, folder, known_hosts=known, strict=[True] * len(chain), agent_sock=sock
+                )
+                args = [ssh, "-F", config, alias(len(chain) - 1), command]
+                try:
+                    with feed(passwords):
+                        p = runner(
+                            args,
+                            input=stdin,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=timeout,
+                            env=env,
+                            check=False,
+                        )
+                except subprocess.TimeoutExpired:
+                    return Result(124, "", f"tempo esgotado depois de {timeout}s", seen)
+                except FileNotFoundError as exc:
+                    raise SshError("ssh (OpenSSH) não encontrado no PATH") from exc
+        finally:
+            if tcp is not None:
+                tcp.close()
+    out, err = mask(p.stdout or ""), mask(p.stderr or "")
+    if sudo and target.secret:  # a senha nunca volta, nem se o sudo a ecoar num erro
+        secret_text = target.secret.decode("utf-8", "replace")
+        out, err = out.replace(secret_text, "••••"), err.replace(secret_text, "••••")
+    return Result(p.returncode, out, err, seen)
 
 
 def _verify_host_keys(
@@ -479,6 +638,9 @@ def _verify_host_keys(
     env: dict[str, str],
     sock: str | None,
     passwords: dict[int, bytes] | None = None,
+    *,
+    feed: Callable[[dict[int, bytes]], contextlib.AbstractContextManager[None]] | None = None,
+    probe_last: bool = False,
 ) -> dict[str, str]:
     """Salto a salto, antes de mandar a credencial de cada host: a sonda passa pelos saltos já
     conferidos (autenticando neles, que é seguro) e chega ao host da vez sem autenticar
@@ -497,7 +659,7 @@ def _verify_host_keys(
             probe=i,
         )
         before_hops = {k: v for k, v in passwords.items() if k < i}  # os já conferidos
-        with password_feed(folder, before_hops):
+        with (feed or (lambda chosen: password_feed(folder, chosen)))(before_hops):
             runner(
                 [ssh, "-F", config, alias(i), "true"],
                 capture_output=True,
@@ -511,6 +673,9 @@ def _verify_host_keys(
         new = fingerprints(known, keygen) - before
         if not new:
             raise SshError(f"{hop.ref}: não consegui ler a chave do host (rede, porta ou salto?)")
+        if probe_last and not hop.fingerprint and i == len(chain) - 1:
+            seen[hop.ref] = ", ".join(sorted(new))  # sonda de 1ª conexão: só mostra a impressão
+            return seen
         if not hop.fingerprint:
             raise SshError(
                 f"{hop.ref}: a chave do host não está fixada, então nenhum segredo foi enviado a "

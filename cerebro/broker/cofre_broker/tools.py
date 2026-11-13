@@ -108,10 +108,13 @@ def t_status(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
 
 
 def t_unlock(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
-    broker.unlock()
+    done = broker.unlock()
+    if not done.get("asked"):
+        how = "de confiança" if done.get("trusted") else "sem o código ainda (pede na 1ª entrega)"
+        return f"o cofre já estava aberto neste aparelho ({how}); nada foi pedido."
     return (
         "cofre destravado neste aparelho (senha e código entraram pelos popups; eu não os vi). "
-        "Tranca sozinho com 2 h sem uso ou ao fechar o Claude."
+        "Vale 24 h, mesmo fechando o Claude; 'lock' tranca antes."
     )
 
 
@@ -270,20 +273,24 @@ def t_ssh_list(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
     if not servers:
         return (
             "Nenhum servidor no cofre deste cérebro. Servidor é uma credencial do tipo 'ssh' "
-            "com host, porta, usuário (e, se precisar, jump e impressão); cadastre pelo portal "
-            "ou pelo store com kind='ssh'."
+            "(host, porta, usuário e, se precisar, jump) ou uma 'senha' com a url "
+            "ssh://usuario@host:porta; cadastre pelo portal ou pelo store."
         )
+    from .ssh_connector import from_url
+
     lines = []
     for e in servers:
+        url_user, url_host, url_port = from_url(str(e.get("url") or ""))
         extra = [
             f"salta por {e['jump']}" if e.get("jump") else "",
-            "chave do host fixada" if e.get("impressao") else "chave do host NÃO fixada",
+            "chave do host fixada" if e.get("impressao") else "1ª conexão pede para confiar",
             f"regra {e['regra']}" if e.get("regra") and e["regra"] != "livre" else "",
         ]
-        lines.append(
-            f"- {e['caminho']}: {e.get('usuario', '?')}@{e.get('host', '?')}:"
-            f"{e.get('porta', 22)} · " + " · ".join(x for x in extra if x)
-        )
+        user = e.get("usuario") or url_user or "?"
+        host = e.get("host") or url_host or "?"
+        port = e.get("porta") or url_port or 22
+        detail = " · ".join(x for x in extra if x)
+        lines.append(f"- {e['caminho']}: {user}@{host}:{port} · {detail}")
     return "\n".join(lines)
 
 
@@ -303,6 +310,7 @@ def t_ssh_run(broker: Broker, args: dict[str, Any], cwd: str | None) -> str:
             str(args.get("command") or ""),
             stdin=str(args.get("stdin") or ""),
             timeout=int(args.get("timeout") or 60),
+            sudo=bool(args.get("sudo")),
         )
     )
 
@@ -579,15 +587,18 @@ SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "ssh_list",
         "inputSchema": _NO_ARGS,
-        "description": "Servidores SSH do cofre neste cérebro (credenciais do tipo 'ssh'): "
-        "usuário@host:porta, salto, se a chave do host está fixada e a regra. Sem segredos.",
+        "description": "Servidores SSH do cofre neste cérebro (credenciais 'ssh' e 'senha' com "
+        "url ssh://): usuário@host:porta, salto, se a chave do host está fixada e a regra. Sem "
+        "segredos.",
     },
     {
         "name": "ssh_run",
         "description": "Roda um comando num servidor do cofre. A senha ou a chave (e as dos "
-        "saltos) vão direto ao ssh, sem passar por mim; a chave do host é conferida antes e host "
-        "sem impressão fixada não recebe segredo (o erro mostra a impressão para gravar). Host "
-        "com regra 'routeros-leitura' só aceita `/menu print|export` com palavras simples.",
+        "saltos) vão direto ao ssh, sem passar por mim; o usuário autoriza com um OK por "
+        "servidor por dia. A chave do host é conferida antes; na 1ª conexão a um servidor, uma "
+        "caixa mostra a impressão da chave dele para o usuário confiar (fica gravada). "
+        "`sudo: true` roda como root com a senha do próprio servidor (sem eu ver). Host com "
+        "regra 'routeros-leitura' só aceita `/menu print|export` com palavras simples.",
         "inputSchema": {
             "type": "object",
             "required": ["server", "command"],
@@ -596,6 +607,10 @@ SCHEMAS: list[dict[str, Any]] = [
                 "command": {"type": "string", "description": "comando remoto"},
                 "stdin": {"type": "string", "description": "entrada do comando (opcional)"},
                 "timeout": {"type": "integer", "description": "segundos (padrão 60, máx. 600)"},
+                "sudo": {
+                    "type": "boolean",
+                    "description": "rodar como root com a senha do servidor (sem stdin)",
+                },
             },
         },
     },

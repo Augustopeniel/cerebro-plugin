@@ -24,6 +24,9 @@ import (
 const contrato = "2.2"
 
 func main() {
+	if emModoAskpass() { // o ssh do conector do cofre chamando (askpass.go)
+		os.Exit(askpass(os.Args[1:]))
+	}
 	os.Exit(rodar(os.Args[1:]))
 }
 

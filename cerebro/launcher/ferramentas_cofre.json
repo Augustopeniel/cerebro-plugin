@@ -1,5 +1,5 @@
 {
- "versao": "2.9.0",
+ "versao": "2.10.0",
  "tools": [
   {
    "name": "status",
@@ -286,11 +286,11 @@
     "type": "object",
     "properties": {}
    },
-   "description": "Servidores SSH do cofre neste cérebro (credenciais do tipo 'ssh'): usuário@host:porta, salto, se a chave do host está fixada e a regra. Sem segredos."
+   "description": "Servidores SSH do cofre neste cérebro (credenciais 'ssh' e 'senha' com url ssh://): usuário@host:porta, salto, se a chave do host está fixada e a regra. Sem segredos."
   },
   {
    "name": "ssh_run",
-   "description": "Roda um comando num servidor do cofre. A senha ou a chave (e as dos saltos) vão direto ao ssh, sem passar por mim; a chave do host é conferida antes e host sem impressão fixada não recebe segredo (o erro mostra a impressão para gravar). Host com regra 'routeros-leitura' só aceita `/menu print|export` com palavras simples.",
+   "description": "Roda um comando num servidor do cofre. A senha ou a chave (e as dos saltos) vão direto ao ssh, sem passar por mim; o usuário autoriza com um OK por servidor por dia. A chave do host é conferida antes; na 1ª conexão a um servidor, uma caixa mostra a impressão da chave dele para o usuário confiar (fica gravada). `sudo: true` roda como root com a senha do próprio servidor (sem eu ver). Host com regra 'routeros-leitura' só aceita `/menu print|export` com palavras simples.",
    "inputSchema": {
     "type": "object",
     "required": [
@@ -313,6 +313,10 @@
      "timeout": {
       "type": "integer",
       "description": "segundos (padrão 60, máx. 600)"
+     },
+     "sudo": {
+      "type": "boolean",
+      "description": "rodar como root com a senha do servidor (sem stdin)"
      }
     }
    }

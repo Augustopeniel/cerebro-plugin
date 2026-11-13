@@ -218,6 +218,14 @@ class Client:
         self._send, self.keys, self.device = transport, keys, device
         self._server, self._clock = server, clock
         self.session: str | None = None  # só na memória do broker
+        # um destrave por dia: a chave da senha (já derivada, nunca a senha) e o bilhete de
+        # confiança ficam só na memória até o fim do dia, para reabrir sozinho se o servidor
+        # esquecer a sessão (portal reiniciado). Trancar de propósito esquece os dois.
+        self._pw_key: bytes | None = None
+        self.ticket = ""
+        self.expires = 0.0
+        self.trusted = False
+        self._reopening = False
 
     # ---------- pareamento (sem assinatura: ainda não há aparelho) ----------
 
@@ -285,6 +293,38 @@ class Client:
     def _call(
         self, op: str, build: Callable[[int], dict[str, Any]], *, session: bool = False
     ) -> tuple[int, dict[str, Any]]:
+        """Pedido assinado. Se o servidor disser que a sessão acabou (portal reiniciado) e ainda
+        for o mesmo dia, destrava de novo sozinho (chave da senha + bilhete) e repete uma vez."""
+        try:
+            return self._call_once(op, build, session=session)
+        except VaultClientError as exc:
+            if not (session and exc.status == 401 and self.session is None and self.reopen()):
+                raise
+        return self._call_once(op, build, session=session)
+
+    def reopen(self) -> bool:
+        """Reabre a sessão sem popup, se a chave da senha ainda está na memória e o dia não
+        acabou. Volta de confiança se o bilhete valer; senão o código será pedido na entrega."""
+        if self._reopening or self._pw_key is None or self._clock() >= self.expires:
+            return False
+        self._reopening = True
+        try:
+            had_ticket = bool(self.ticket)
+            self._unlock_with(self._pw_key, self.ticket)
+            if had_ticket and not self.trusted:
+                # o bilhete foi revogado ("sair de tudo" no portal): não fica aberto com a chave
+                # guardada; tranca, esquece e o próximo uso pede senha e código
+                self.lock()
+                return False
+            return True
+        except VaultClientError:
+            return False
+        finally:
+            self._reopening = False
+
+    def _call_once(
+        self, op: str, build: Callable[[int], dict[str, Any]], *, session: bool = False
+    ) -> tuple[int, dict[str, Any]]:
         if not self.device:
             raise VaultClientError("aparelho não pareado: rode o pareamento")
         if session and not self.session:
@@ -341,9 +381,20 @@ class Client:
         if not info.get("configurado"):
             raise VaultClientError("cofre ainda não configurado nesta conta")
         key = derive(password, unb64(info["sal"]), info["parametros"])
-        self.session = self._call(
-            "destravar", lambda t: {"selado": self._seal("destravar", t, key)}
-        )[1]["sessao"]
+        self.ticket = ""  # destrave com a senha: o bilhete antigo (se houver) não vale mais aqui
+        self._unlock_with(key, "")
+        self._pw_key = key
+
+    def _unlock_with(self, key: bytes, ticket: str) -> None:
+        def body(t: int) -> dict[str, Any]:
+            return {"selado": self._seal("destravar", t, key)} | (
+                {"bilhete": ticket} if ticket else {}
+            )
+
+        answer = self._call_once("destravar", body)[1]
+        self.session = answer["sessao"]
+        self.trusted = bool(answer.get("confianca"))
+        self.expires = float(answer.get("vence") or self._clock() + float(answer["vale_por"]))
 
     def change_password(self, new: str) -> None:
         _check_password(new)
@@ -365,9 +416,12 @@ class Client:
         )
 
     def lock(self) -> None:
+        """Trancar de propósito: o servidor invalida os bilhetes e aqui se esquece a chave da
+        senha (o próximo uso pede senha e código)."""
+        self._pw_key, self.ticket, self.trusted, self.expires = None, "", False, 0.0
         if self.session:
             try:
-                self._call("trancar", lambda t: {}, session=True)
+                self._call_once("trancar", lambda t: {}, session=True)
             finally:
                 self.session = None
 
@@ -437,6 +491,9 @@ class Client:
             for i in items
         ]
         answer = self._call("confirmar", lambda t: {"codigo": code, "itens": wire}, session=True)[1]
+        self.trusted = True  # código certo: a sessão é de confiança até o fim do dia
+        if answer.get("bilhete"):  # servidor novo: o bilhete reabre a sessão se ela sumir
+            self.ticket = str(answer["bilhete"])
         return int(answer.get("confirmadas", 0))
 
     def allow(self, item_id: int, via: str, target: str) -> dict[str, Any]:
@@ -444,6 +501,13 @@ class Client:
         pergunta. Só na sessão de confiança (o servidor confere)."""
         data = {"id": int(item_id), "via": str(via), "alvo": str(target)}
         return self._call("liberar", lambda t: data, session=True)[1]["credencial"]
+
+    def pin(self, item_id: int, fingerprint: str) -> dict[str, Any]:
+        """1ª conexão SSH: grava a impressão da chave do host que o dono confirmou. Só na sessão
+        de confiança, só o dono e só se a credencial ainda não tem impressão (o servidor
+        confere)."""
+        data = {"id": int(item_id), "impressao": str(fingerprint)}
+        return self._call("fixar", lambda t: data, session=True)[1]["credencial"]
 
     def pending(self) -> dict[str, list[dict[str, Any]]]:
         """O que espera a aprovação do dono: compartilhamentos e chaves de time (sem segredo)."""

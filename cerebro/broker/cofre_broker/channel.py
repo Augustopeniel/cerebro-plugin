@@ -50,7 +50,8 @@ MAX_REQUEST = 256 * 1024
 ADMIN_WINDOW_S = 60
 # o que outras sessões e a linha de comando (`pair`, `status`) podem pedir: nada recebe senha nem
 # valor, nada devolve kit (a janela, que mandava senha e valor por aqui, saiu na 2.7.0)
-ADMIN_ACTIONS = frozenset({"state", "lock", "pair_start", "pair_poll", "tool"})
+# `stop`: só o broker de fundo atende (sai para o da versão nova subir)
+ADMIN_ACTIONS = frozenset({"state", "lock", "pair_start", "pair_poll", "tool", "stop"})
 
 ToolRunner = Callable[[str, dict[str, Any], str | None], dict[str, Any]]
 
@@ -107,7 +108,7 @@ def _broker_process(peer: PEER.Peer | None) -> bool:
     return bool(
         peer is not None
         and peer.exe == os.path.realpath(sys.executable)
-        and peer.is_module("cofre_broker.cli", frozenset({"mcp", "pair", "status"}))
+        and peer.is_module("cofre_broker.cli", frozenset({"mcp", "pair", "status", "fundo"}))
     )
 
 
@@ -130,8 +131,10 @@ class ChannelServer:
         tool_runner: ToolRunner | None = None,
         retry: float = 5.0,
         admin_peer: Callable[[PEER.Peer | None], bool] | None = None,
+        on_stop: Callable[[], None] | None = None,
     ) -> None:
         self.broker, self.tool_runner, self.retry = broker, tool_runner, retry
+        self.on_stop = on_stop  # só o broker de fundo (fundo.py) tem: aceita `stop`
         self.admin_peer = admin_peer or _broker_process
         self.owner = False
         self._seen: dict[str, float] = {}
@@ -169,7 +172,8 @@ class ChannelServer:
             elif op == "hello":
                 answer = {
                     "ok": True,
-                    "result": {"broker": C.NAME, "version": C.VERSION, "pid": os.getpid()},
+                    "result": {"broker": C.NAME, "version": C.VERSION, "pid": os.getpid(),
+                               "fundo": self.on_stop is not None},
                 }
             elif op == "admin":
                 if checked and not self.admin_peer(peer):
@@ -211,6 +215,11 @@ class ChannelServer:
         action, args = body.get("action"), body.get("args") or {}
         if action not in ADMIN_ACTIONS or not isinstance(args, dict):
             raise BrokerError(f"ação desconhecida: {action!r}")
+        if action == "stop":
+            if self.on_stop is None:
+                raise BrokerError("este broker é de uma sessão do Claude: não para pelo canal")
+            threading.Timer(0.2, self.on_stop).start()  # responde antes de sair
+            return {"parando": True}
         if action == "tool":
             if self.tool_runner is None:
                 raise BrokerError("este broker não atende ferramentas")

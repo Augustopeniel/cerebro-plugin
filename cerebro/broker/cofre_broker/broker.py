@@ -214,10 +214,11 @@ class Broker:
         self._lock = threading.RLock()  # cliente, sessão e pareamento
         self._deliver_lock = threading.Lock()  # entregas (e seus popups) uma de cada vez
         self._client: Client | None = None
-        # sessão (cvs_…) em que o código do autenticador já foi digitado: daí em diante só a
-        # caixa de OK das credenciais 'sempre'; vale até trancar, vencer ou fechar o Claude
-        self._trusted_session: str | None = None
+        # a confiança (o código do dia) fica no cliente (`client.trusted`): vale 24 h do destrave
         self._pending: dict[str, Any] | None = None
+        # OK do dia: (credencial, via, alvo) autorizados na caixa valem até o fim da sessão de
+        # confiança (o dia), sem perguntar de novo; copiar, digitar e intérprete perguntam sempre
+        self._ok_today: dict[tuple[str, str, str], float] = {}
         self._seen = threading.local()
         self.channel_state = "desligado"  # o canal local escreve aqui (status)
 
@@ -391,25 +392,39 @@ class Broker:
         return kit
 
     def unlock(self, password: str | None = None) -> dict[str, Any]:
+        """Destrava (senha + código, uma vez por dia). Já aberto: confere com o servidor; se a
+        sessão sumiu (portal reiniciado), reabre sozinho no mesmo dia, sem popup. Devolve
+        `asked`: se a senha foi pedida agora."""
         client = self.client()
         with self._lock:
             if password is None:
-                if client.session:
-                    return {"unlocked": True}
+                if client.session and self._alive(client):
+                    return {"unlocked": True, "asked": False, "trusted": client.trusted}
+                if client.reopen():
+                    return {"unlocked": True, "asked": False, "trusted": client.trusted}
                 password = self.ui.prompt_secret(
                     TITLE, "Senha do cofre para destravar (o Claude não vê o que você digitar):"
                 )
                 if not password:
                     raise BrokerError("o cofre segue trancado (popup cancelado)")
             client.unlock(password)
-            self._trusted_session = None
             self._session_code(client)
         self.review_pending()
-        return {"unlocked": True}
+        return {"unlocked": True, "asked": True, "trusted": client.trusted}
+
+    @staticmethod
+    def _alive(client: Client) -> bool:
+        """A sessão que o cliente guarda ainda vale no servidor? (um pedido barato com sessão)"""
+        try:
+            client.pending()
+            return client.session is not None
+        except VaultClientError:
+            return client.session is not None
 
     def _relocking(self, call: Callable[[], Any]) -> Any:
-        """Roda `call`; se o servidor disser que a sessão acabou (portal reiniciado, 2 h sem uso),
-        destrava de novo (senha + código) e tenta uma vez."""
+        """Roda `call`; se a sessão acabou de vez (passou o dia, ou trancaram de propósito),
+        destrava de novo (senha + código) e tenta uma vez. Portal reiniciado no mesmo dia o
+        cliente resolve sozinho, sem popup (protocol.Client.reopen)."""
         try:
             return call()
         except VaultClientError as exc:
@@ -419,30 +434,30 @@ class Broker:
         return call()
 
     def trusted(self) -> bool:
-        """A sessão atual já passou pelo código do autenticador (autenticou uma vez)."""
+        """A sessão atual já passou pelo código do autenticador hoje (o servidor confirmou, ou
+        ela voltou pelo bilhete depois de um reinício do portal)."""
         client = self._client
-        return bool(client and client.session and client.session == self._trusted_session)
+        return bool(client and client.session and client.trusted)
 
     def _session_code(self, client: Client) -> None:
         """Logo depois da senha, o código de 6 dígitos uma vez só: o servidor passa a confiar
-        nesta sessão até trancar (2 h sem uso ou o Claude fechar). Cancelar não desfaz o
-        destrave: o código volta a ser pedido na primeira entrega."""
+        nesta sessão por 24 h (um destrave por dia). Cancelar não desfaz o destrave: o código
+        volta a ser pedido na primeira entrega."""
         try:
             self._with_code(
                 "Cofre destravado. Para terminar de autenticar, digite o código de 6 dígitos do "
-                "app autenticador (uma vez só: vale até fechar o Claude ou ficar 2 h sem uso; "
-                "o Claude não vê).",
+                "app autenticador (uma vez por dia: vale 24 h, mesmo fechando o Claude; o Claude "
+                "não vê).",
                 lambda code: client.confirm(code, []),
                 "código cancelado: será pedido na primeira entrega",
             )
         except (BrokerError, VaultClientError) as exc:
             C.log(f"sessão sem o código: {exc}")
             return
-        self._trusted_session = client.session
 
     def lock(self) -> dict[str, Any]:
         with self._lock:
-            self._trusted_session = None
+            self._ok_today.clear()
             if self._client is not None:
                 self._client.lock()
         return {"unlocked": False}
@@ -494,7 +509,7 @@ class Broker:
             lambda code: client.confirm(code, items),
             "cancelado na confirmação: nada foi entregue",
         )
-        self._trusted_session = client.session  # o código certo vale para a sessão inteira
+        client.trusted = True  # o código certo vale para a sessão inteira (o dia)
         return count
 
     def pending(self) -> dict[str, list[dict[str, Any]]]:
@@ -752,7 +767,7 @@ class Broker:
         """Entrega {nome: caminho} pela via e alvo dados. O que o servidor segurar (428) vira um
         popup só, com o código do autenticador, e é pedido de novo uma vez. Com `force`, o
         código vem antes da 1ª entrega, mesmo com a política 'livre'. Depois do código (a
-        sessão de confiança, que vale 2 h sem uso e renova a cada uso), o servidor não segura
+        sessão de confiança, que vale 24 h do destrave), o servidor não segura
         mais nada: copiar, digitar, intérprete e 'sempre' mostram só a caixa de autorização,
         uma para o pedido inteiro (decisão do Augusto, 2026-11-12)."""
         client = self.client()
@@ -835,26 +850,35 @@ class Broker:
                 fresh.append(item)
         if not items:
             return
+        daily = not force  # copiar, digitar e intérprete: a caixa a cada uso
+        if daily and self._approved_today(items, via, target):
+            return
         if not fresh:
             message = (
-                f"{head}\n\nCredenciais:\n{self._items_text(items)}\n\nAutorizar? (o código já "
-                "foi digitado no destrave; o Claude não vê o valor)"
+                f"{head}\n\nCredenciais:\n{self._items_text(items)}\n\nAutorizar? "
+                + ("Vale até o fim do dia para este destino. " if daily else "")
+                + "(O código já foi digitado no destrave; o Claude não vê o valor.)"
             )
             if not self.ui.confirm(TITLE, message):
                 raise BrokerError("cancelado na autorização: nada foi entregue")
+            if daily:
+                self._approve_today(items, via, target)
             return
         message = (
             f"{head}\n\nCredenciais:\n{self._items_text(items)}\n\n"
             f"Destino novo para {len(fresh)} delas ({via}:{target}): confira se foi você quem "
-            "pediu.\n• Só desta vez: entrega agora e pergunta de novo da próxima.\n"
-            "• Liberar destino: entrega e, da próxima vez, este destino não pergunta (copiar, "
-            "digitar, intérprete e 'sempre' perguntam sempre).\n(O Claude não vê o valor.)"
+            "pediu.\n• Só hoje: entrega e não pergunta de novo até o fim do dia.\n"
+            "• Liberar destino: entrega e, daqui em diante, este destino não pergunta (copiar, "
+            "digitar e intérprete perguntam a cada uso; 'sempre', uma vez por dia).\n"
+            "(O Claude não vê o valor.)"
         )
         choice = getattr(self.ui, "choose", None)
         answer = choice(TITLE, message) if choice else ("uma" if self.ui.confirm(TITLE, message)
                                                         else None)  # fmt: skip
         if answer not in ("uma", "liberar"):
             raise BrokerError("negado na autorização: nada foi entregue")
+        if daily:
+            self._approve_today(items, via, target)
         if answer == "liberar":
             client = self.client()
             for item in fresh:
@@ -862,6 +886,17 @@ class Broker:
                     client.allow(int(item["id"]), via, target)
                 except VaultClientError as exc:  # não liberou: entrega mesmo assim, desta vez
                     C.log(f"liberar {item['caminho']} → {via}:{target}: {exc}")
+
+    def _approved_today(self, items: list[dict[str, Any]], via: str, target: str) -> bool:
+        now = self._clock()
+        keys = [(str(i["caminho"]).lower(), via, target) for i in items]
+        return all(self._ok_today.get(k, 0) > now for k in keys)
+
+    def _approve_today(self, items: list[dict[str, Any]], via: str, target: str) -> None:
+        client = self._client
+        until = getattr(client, "expires", 0) or self._clock() + 24 * 3600
+        for i in items:
+            self._ok_today[(str(i["caminho"]).lower(), via, target)] = until
 
     def _group_entries(self, group: str) -> dict[str, str]:
         """{NOME: caminho} das entradas diretas do grupo (o nome é o da variável)."""
@@ -1012,7 +1047,53 @@ class Broker:
     # ---------- ssh (servidores = credenciais do tipo 'ssh') ----------
 
     def ssh_servers(self) -> list[dict[str, Any]]:
-        return [e for e in self.client().list() if e.get("tipo") == "ssh"]
+        """Servidores do cofre: credenciais `ssh` e `senha` com url `ssh://…`."""
+        return [e for e in self.client().list() if ssh_connector.is_server(e)]
+
+    def _trust_host(self, chain: list[dict[str, Any]], index: int, timeout: int) -> None:
+        """1ª conexão ao salto `index`: a sonda passa pelos saltos já conferidos (com os segredos
+        deles) e chega a este sem autenticar, só para ler a chave. A caixa mostra a impressão;
+        "OK" grava na credencial (só o dono, na sessão de confiança). Nada vai para o servidor
+        antes disso."""
+        hop = chain[index]
+        before = {str(i): str(e["caminho"]) for i, e in enumerate(chain[:index])}
+        with self._deliver_lock:
+            deliveries: dict[str, Delivery] = {}
+            if before:
+                head = f"Passar pelos saltos para ler a chave do servidor {hop['caminho']}"
+                deliveries, _ = self._deliver_all(before, "ambiente", "ssh", head)
+            target = None
+            for i, entry in enumerate(chain[: index + 1]):
+                secret = deliveries[str(i)].value if str(i) in deliveries else b""
+                target = ssh_connector.target_from(entry, secret, target)
+        assert target is not None  # noqa: S101 (ao menos o salto da vez)
+        try:
+            seen = ssh_connector.run(
+                target, "true", timeout=max(1, min(int(timeout), 120)), probe_only=True
+            ).host_keys.get(str(hop["caminho"]), "")
+        except ssh_connector.SshError as exc:
+            raise BrokerError(str(exc)) from exc
+        found = [f.strip() for f in seen.split(",") if f.strip()]
+        if not found:
+            raise BrokerError(f"{hop['caminho']}: não consegui ler a chave do servidor")
+        message = (
+            f"Primeira conexão ao servidor {hop['caminho']} "
+            f"({target.user}@{target.host}:{target.port}).\n\nImpressão da chave do servidor:\n"
+            + "\n".join(found)
+            + "\n\nConfiar neste servidor? A impressão fica gravada na credencial e, se um dia "
+            "mudar, a conexão é barrada (possível interceptação). Se puder, confira com quem "
+            "cuida do servidor: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"
+        )
+        if not self.ui.confirm(TITLE, message):
+            raise BrokerError(f"{hop['caminho']}: servidor não confiado; nada foi enviado a ele")
+        client = self.client()
+        if not self.trusted():
+            self._session_code(client)
+        try:
+            self._relocking(lambda: client.pin(int(hop["id"]), found[0]))
+        except VaultClientError as exc:
+            raise BrokerError(f"{hop['caminho']}: não gravei a impressão ({exc})") from exc
+        hop["impressao"] = found[0]
 
     def _ssh_chain(self, server: str) -> list[dict[str, Any]]:
         by_path = {str(e["caminho"]).lower(): e for e in self.ssh_servers()}
@@ -1020,7 +1101,10 @@ class Broker:
         while ref:
             entry = by_path.get(ref)
             if entry is None:
-                raise BrokerError(f"servidor {ref!r} não está no cofre (tipo ssh) deste cérebro")
+                raise BrokerError(
+                    f"servidor {ref!r} não está no cofre deste cérebro (credencial ssh, ou senha "
+                    "com url ssh://usuario@host:porta)"
+                )
             if entry in chain or len(chain) >= SSH_HOPS_MAX:
                 raise BrokerError(f"saltos demais ou em círculo a partir de {server!r}")
             chain.append(entry)
@@ -1028,12 +1112,21 @@ class Broker:
         return chain[::-1]  # do primeiro salto ao destino
 
     def ssh(
-        self, server: str, command: str, *, stdin: str = "", timeout: int = 60, script: bool = False
+        self,
+        server: str,
+        command: str,
+        *,
+        stdin: str = "",
+        timeout: int = 60,
+        script: bool = False,
+        sudo: bool = False,
     ) -> dict[str, Any]:
         """Roda um comando no servidor; as senhas e chaves dos saltos vão ao ssh sem passar pelo
-        Claude (destino exigido em cada credencial: ambiente:ssh). A regra do host é conferida
-        antes de buscar qualquer segredo, e host sem impressão fixada não recebe segredo: só a
-        sonda roda até ele, e o erro mostra a impressão vista para gravar."""
+        Claude (via ambiente:ssh; um OK por servidor por dia). A regra do host é conferida antes
+        de buscar qualquer segredo. Servidor sem a chave do host fixada: a 1ª conexão sonda o
+        servidor sem segredo, mostra a impressão numa caixa ("Confiar neste servidor?") e grava;
+        daí em diante uma chave diferente barra a conexão. `sudo`: como root, com a senha do
+        próprio servidor pelo stdin do ssh."""
         if not isinstance(command, str) or not command.strip():
             raise BrokerError("diga o comando")
         chain = self._ssh_chain(server)
@@ -1043,33 +1136,40 @@ class Broker:
         assert dry is not None  # noqa: S101 (a cadeia tem ao menos o destino)
         try:
             ssh_connector.check_rule(dry, command, script=script)
+            if sudo and dry.rule != "livre":
+                raise ssh_connector.SshError(f"{dry.ref}: host só de leitura não aceita sudo")
         except ssh_connector.SshError as exc:
             raise BrokerError(str(exc)) from exc
-        # só os saltos antes do 1º sem impressão fixada recebem segredo (para a sonda chegar nele)
-        reach = next((i for i, e in enumerate(chain) if not e.get("impressao")), len(chain))
+        while True:  # 1ª conexão: confiar (ou não) em cada salto sem impressão, do 1º ao último
+            reach = next((i for i, e in enumerate(chain) if not e.get("impressao")), len(chain))
+            if reach == len(chain):
+                break
+            self._trust_host(chain, reach, timeout)
         last = chain[-1]
         what = "script" if script else "comando"
         head = (
-            f"Rodar no servidor {last['caminho']} ({last.get('usuario')}@{last.get('host')}) o "
-            f"{what}:\n{command[:300]}"
+            f"Rodar no servidor {last['caminho']} ({dry.user}@{dry.host}) o "
+            f"{what}{' como root (sudo)' if sudo else ''}:\n{command[:300]}"
         )
-        if reach < len(chain):
+        wanted = {str(i): str(e["caminho"]) for i, e in enumerate(chain)}
+        if sudo:  # a senha passa pela conta remota: a caixa a cada uso, fora do OK do dia
             head += (
-                f"\n\n{chain[reach]['caminho']} não tem a chave do host fixada: só a sonda vai "
-                "até ele, sem segredo."
+                "\n\nA senha deste servidor vai pelo stdin do ssh até o sudo, dentro da conta "
+                "remota: aprove só se confia no que roda nessa conta."
             )
-        wanted = {str(i): str(e["caminho"]) for i, e in enumerate(chain[:reach])}
-        deliveries: dict[str, Delivery] = {}
         with self._deliver_lock:
-            if wanted:
-                deliveries, _ = self._deliver_all(wanted, "ambiente", "ssh", head)
+            deliveries, _ = self._deliver_all(wanted, "ambiente", "ssh", head, force=sudo)
             target = None
             for i, entry in enumerate(chain):
-                secret = deliveries[str(i)].value if str(i) in deliveries else b""
-                target = ssh_connector.target_from(entry, secret, target)
+                target = ssh_connector.target_from(entry, deliveries[str(i)].value, target)
         try:
             result = ssh_connector.run(
-                target, command, timeout=max(1, min(int(timeout), 600)), stdin=stdin, script=script
+                target,
+                command,
+                timeout=max(1, min(int(timeout), 600)),
+                stdin=stdin,
+                script=script,
+                sudo=sudo,
             )
         except ssh_connector.SshError as exc:
             raise BrokerError(str(exc)) from exc

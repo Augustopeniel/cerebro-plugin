@@ -71,8 +71,12 @@ var regras = []regra{
 
 // vistas no comando inteiro (um script do osascript pode ocupar várias linhas)
 var regrasDoTodo = []regra{
-	{padrao: regexp.MustCompile(`(?is)\bosascript\b.*System Events.*\bclick\b|\bosascript\b.*\bclick\b.*System Events`),
-		motivo: "clicar pelo System Events aprovaria um popup do cofre no lugar do usuário"},
+	{padrao: regexp.MustCompile(`(?is)\bosascript\b.*System Events.*\b(?:click|keystroke|key code|perform action)\b|\bosascript\b.*\b(?:click|keystroke|key code|perform action)\b.*System Events|Application\(\s*["']System Events`),
+		motivo: "clicar ou teclar pelo System Events aprovaria um popup do cofre no lugar do usuário"},
+	// a caixa de OK do cofre (um destrave por dia) só vale se quem clica é a pessoa: simular
+	// teclado ou mouse pelo terminal aprovaria no lugar dela
+	{padrao: regexp.MustCompile(`(?i)\bcliclick\b|\bxdotool\s+(?:\S+\s+)*(?:key|click|type|mousedown|mouseup)\b|\bydotool\b|SendKeys|\bSendWait\b|\bmouse_event\b|\bkeybd_event\b|\bSendInput\b|InvokePattern|\bAppActivate\b`),
+		motivo: "simular teclado ou clique aprovaria uma caixa do cofre no lugar do usuário"},
 }
 
 const mensagemDaGuarda = "Bloqueado pelo cofre do cérebro: %s. O Claude nunca lê segredo cru. Use as " +

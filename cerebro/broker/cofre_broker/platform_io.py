@@ -124,7 +124,7 @@ _OSA_CONFIRM = (
     'default button "OK" cancel button "Cancelar"\n'
     'return "OK"\n'
 )
-# três botões (Negar / Só desta vez / Liberar destino): os rótulos também chegam pelo ambiente,
+# três botões (Negar / Só hoje / Liberar destino): os rótulos também chegam pelo ambiente,
 # e a resposta volta como palavra fixa, sem acento
 _OSA_CHOOSE = (
     "activate\n"
@@ -382,7 +382,7 @@ def confirm(title: str, message: str) -> bool:
     raise _unsupported("popup")
 
 
-DENY, ONCE, ALLOW = "Negar", "Só desta vez", "Liberar destino"
+DENY, ONCE, ALLOW = "Negar", "Só hoje", "Liberar destino"
 
 
 def _linux_choose(title: str, message: str) -> str | None:
@@ -408,7 +408,7 @@ def _linux_choose(title: str, message: str) -> str | None:
 
 
 def choose(title: str, message: str) -> str | None:
-    """Caixa de autorização de destino novo: 'uma' (só desta vez), 'liberar' (põe o destino na
+    """Caixa de autorização de destino novo: 'uma' (só hoje), 'liberar' (põe o destino na
     lista, da próxima vez não pergunta) ou None (negou, fechou ou o tempo acabou)."""
     if IS_MAC:
         env = _dialog_env(title, message) | {

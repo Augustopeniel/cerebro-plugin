@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 NAME = "cerebro-cofre"
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 PROTOCOL_FALLBACK = "2025-06-18"
 DEFAULT_URL = "https://cerebro.ogidoc.com"
 CONFIG_FILE = "cofre.json"
