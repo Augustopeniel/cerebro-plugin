@@ -5,6 +5,11 @@ package main
 // (porta de um socket TCP em 127.0.0.1 e um token de uso único). Este processo não guarda nem
 // sabe segredo nenhum: pergunta ao broker, que só responde ao prompt exato de um salto conhecido,
 // uma vez por conexão. Resposta vazia (ou qualquer erro): sai com 1 e o ssh não recebe nada.
+//
+// Quem decide é o broker, não este processo: antes de ler o pedido, ele acha pela tabela TCP do
+// Windows o pid de quem conectou e só segue se for descendente do ssh que ele acabou de lançar.
+// Um processo de fora, mesmo com a porta e o bilhete (o ambiente do ssh é legível pelo mesmo
+// usuário), não recebe nada: o broker desarma, mata o ssh e registra.
 
 import (
 	"bufio"

@@ -50,7 +50,9 @@ def spawn() -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     extra: dict = {}
     if os.name == "nt":
-        flags = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED, NEW_PROCESS_GROUP, NO_WINDOW
+        # NEW_PROCESS_GROUP | NO_WINDOW: um console próprio e oculto, que os filhos herdam (sem
+        # DETACHED: sem console nenhum, cada filho de console ganharia uma janela visível)
+        flags = 0x00000200 | 0x08000000
         extra["creationflags"] = flags
     else:
         extra["start_new_session"] = True

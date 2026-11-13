@@ -97,6 +97,7 @@ def _run(
             errors="replace",
             env=env,
             timeout=timeout,
+            **C.NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         C.log(f"{args[0]} falhou:", type(exc).__name__)

@@ -1026,6 +1026,7 @@ class Broker:
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 timeout=limit,
+                **C.NO_WINDOW,
                 check=False,
             )
             code, out, err = proc.returncode, proc.stdout, proc.stderr

@@ -22,7 +22,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 NAME = "cerebro-cofre"
-VERSION = "2.10.0"
+
+# Windows: todo programa que o cofre lança (ssh, ssh-keygen, ssh-agent, popups, `run`) sobe
+# sem janela de console. Sem isso, o broker de fundo, que não tem console, faz o Windows abrir
+# uma janela de cmd para cada filho; fechá-la mata o ssh.
+NO_WINDOW: dict = {"creationflags": 0x08000000} if os.name == "nt" else {}  # CREATE_NO_WINDOW
+
+VERSION = "2.10.1"
 PROTOCOL_FALLBACK = "2025-06-18"
 DEFAULT_URL = "https://cerebro.ogidoc.com"
 CONFIG_FILE = "cofre.json"

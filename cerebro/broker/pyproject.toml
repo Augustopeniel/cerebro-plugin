@@ -1,6 +1,6 @@
 [project]
 name = "cerebro-cofre-broker"
-version = "2.10.0"
+version = "2.10.1"
 description = "Broker local do cofre do cérebro (plugin cerebro): entrega credenciais sem mostrá-las ao Claude"
 requires-python = ">=3.11"
 dependencies = [
