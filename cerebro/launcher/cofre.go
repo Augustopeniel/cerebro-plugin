@@ -239,44 +239,46 @@ func (p *perfil) preparar() int {
 	return 0
 }
 
-// do hook de início: adianta o download sem segurar a sessão
-func (p *perfil) prepararEmSegundoPlano() {
-	if _, err := os.Stat(p.marcaPronto()); err == nil || os.Getenv("CEREBRO_SEM_DOWNLOAD") == "1" {
-		return
-	}
-	eu, err := os.Executable()
-	if err != nil {
-		return
-	}
-	c := exec.Command(eu, "preparar", p.dados)
-	c.Env = append(os.Environ(), "CEREBRO_PLUGIN_ROOT="+p.raiz)
-	soltarDoPai(c)
-	if c.Start() == nil {
-		_ = c.Process.Release()
-	}
-}
-
 func (p *perfil) estadoDoCofre() string {
 	if _, err := os.Stat(p.marcaPronto()); err == nil {
 		return "pronto (uv " + versaoUV + " e Python " + versaoPython + " em " + p.pastaRuntime() + ")"
 	}
-	return "ainda não preparado (baixa sozinho na próxima abertura, ou rode `cerebro-plugin preparar`)"
+	return "ainda não preparado (baixa sozinho no 1º uso do cofre, ou rode `cerebro-plugin preparar`)"
 }
 
-// MCP e comandos do cofre: prepara se faltar e entrega stdin/stdout ao broker
+// o broker pelo python do venv, não pelo cerebro-cofre.exe que o uv gera: políticas de empresa
+// (AppLocker/WDAC, antivírus) barram esse executável no Windows e o MCP cai ao subir
+func (p *perfil) comandoDoBroker(args []string) *exec.Cmd {
+	modulo := append([]string{"python", "-m", "cofre_broker.cli"}, args...)
+	c := exec.Command(p.caminhoUV(), p.argsDoUV(modulo...)...)
+	c.Env = p.ambienteUV()
+	c.Stderr = os.Stderr
+	return c
+}
+
+func (p *perfil) prepararParaUso() error {
+	if os.Getenv("CEREBRO_SEM_DOWNLOAD") == "1" {
+		return errors.New("download desligado (CEREBRO_SEM_DOWNLOAD=1)")
+	}
+	return p.prepararAgora(10 * time.Minute)
+}
+
+// MCP e comandos do cofre. O MCP sobe a cada abertura do Claude: sem o runtime baixado, ele é
+// atendido pelo lançador e só baixa na 1ª ferramenta (preguica.go). Os outros comandos preparam
+// na hora, se faltar, e entregam stdin/stdout ao broker.
 func (p *perfil) cofre(args []string) int {
 	if _, err := os.Stat(p.marcaPronto()); err != nil {
+		if len(args) == 1 && args[0] == "mcp" {
+			return servirPreguicoso(os.Stdin, os.Stdout, p.prepararParaUso,
+				func() *exec.Cmd { return p.comandoDoBroker(args) })
+		}
 		if err := p.prepararAgora(3 * time.Minute); err != nil {
 			fmt.Fprintln(os.Stderr, "cofre:", err)
 			return 1
 		}
 	}
-	// pelo python do venv, não pelo cerebro-cofre.exe que o uv gera: políticas de empresa
-	// (AppLocker/WDAC, antivírus) barram esse executável no Windows e o MCP cai ao subir
-	modulo := append([]string{"python", "-m", "cofre_broker.cli"}, args...)
-	c := exec.Command(p.caminhoUV(), p.argsDoUV(modulo...)...)
-	c.Env = p.ambienteUV()
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	c := p.comandoDoBroker(args)
+	c.Stdin, c.Stdout = os.Stdin, os.Stdout
 	repassarSinais(c)
 	if err := c.Run(); err != nil {
 		var saiu *exec.ExitError

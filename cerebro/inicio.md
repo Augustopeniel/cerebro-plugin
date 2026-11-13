@@ -1,6 +1,6 @@
 # Cérebro (plugin `cerebro`, contrato v2.2)
 
-**Antes de responder, chame `load_context` do MCP `cerebro`** e siga as regras que vierem nele. Se o servidor pedir login, diga ao usuário: `/mcp` → `plugin:cerebro:cerebro` → Authenticate (abre o portal no navegador).
+**Antes de responder, chame `load_context` do MCP `cerebro`** e siga as regras que vierem nele. Se o cérebro pedir login, explique ao usuário em palavras simples: digite `/mcp`, escolha `plugin:cerebro:cerebro` e clique em Authenticate; o navegador abre o portal para entrar e escolher o cérebro.
 
 - Sua memória é este cérebro. Não grave memória no CLAUDE.md nem na memória automática do Claude Code: tudo o que valer guardar vai para o cérebro.
 - Leia em camadas e só o necessário: carga → índices → Resumo → seção → nota completa.

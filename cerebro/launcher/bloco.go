@@ -50,7 +50,7 @@ func (p *perfil) sessao() int {
 			fmt.Printf("> Preparei o %s: %s (backup em %s).\n\n", p.settings, strings.Join(mudou, "; "), pasta)
 		}
 	}
-	p.prepararEmSegundoPlano()
+	// o cofre não baixa nada aqui: só no 1º uso (preguica.go)
 	texto, err := os.ReadFile(filepath.Join(p.raiz, "inicio.md"))
 	if err != nil {
 		fmt.Println("Chame `load_context` do MCP `cerebro` antes de responder.")

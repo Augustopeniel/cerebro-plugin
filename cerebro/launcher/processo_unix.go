@@ -9,11 +9,6 @@ import (
 	"syscall"
 )
 
-// o preparo em segundo plano sobrevive ao fim do hook
-func soltarDoPai(c *exec.Cmd) {
-	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-}
-
 // o Claude Code encerra o MCP com SIGTERM/SIGINT: repassa ao broker para ele trancar o cofre
 func repassarSinais(c *exec.Cmd) {
 	sinais := make(chan os.Signal, 4)

@@ -1,0 +1,387 @@
+{
+ "versao": "2.9.0",
+ "tools": [
+  {
+   "name": "status",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "description": "Situação do cofre neste aparelho: vinculado, configurado, destravado, quantas credenciais e o canal dos MCPs locais. Não pede senha. Comece aqui."
+  },
+  {
+   "name": "unlock",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "description": "Destrava o cofre: abre um popup NATIVO para o usuário digitar a senha do cofre (eu nunca a vejo). As ferramentas de entrega destravam sozinhas."
+  },
+  {
+   "name": "lock",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "description": "Tranca o cofre agora (encerra a sessão no servidor e esquece aqui)."
+  },
+  {
+   "name": "list_entries",
+   "description": "Lista as credenciais visíveis neste aparelho com tipo, usuário, url, versão e destinos — NUNCA o valor. Use para achar o 'ref' das outras.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "group": {
+      "type": "string",
+      "description": "só este grupo, ex.: 'mcp/zabbix'"
+     },
+     "archived": {
+      "type": "boolean",
+      "description": "incluir as arquivadas"
+     }
+    }
+   }
+  },
+  {
+   "name": "events",
+   "description": "Últimos eventos do cofre (gravar, entregar, destravar, recusas), sem o valor.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "limit": {
+      "type": "integer",
+      "description": "quantos (padrão 20, máx. 200)"
+     }
+    }
+   }
+  },
+  {
+   "name": "store",
+   "description": "Grava uma credencial nova. O valor o usuário digita num popup mascarado (eu não vejo), ou com generate=true o broker gera uma senha forte que ninguém vê. NUNCA peça o valor na conversa.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "grupo/NOME, ex.: 'api/GITHUB_PAT'"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "senha",
+       "token",
+       "ssh",
+       "chave",
+       "nota",
+       "ambiente"
+      ]
+     },
+     "username": {
+      "type": "string"
+     },
+     "url": {
+      "type": "string"
+     },
+     "description": {
+      "type": "string"
+     },
+     "confirmation": {
+      "type": "string",
+      "enum": [
+       "sempre",
+       "sessao"
+      ],
+      "description": "caixa de OK a cada uso (padrão) ou nenhuma depois do destrave; 'livre' e o escopo só o dono define"
+     },
+     "generate": {
+      "type": "boolean",
+      "description": "gerar senha forte em vez do popup"
+     },
+     "length": {
+      "type": "integer",
+      "description": "tamanho da gerada (padrão 24)"
+     }
+    },
+    "required": [
+     "path"
+    ]
+   }
+  },
+  {
+   "name": "update",
+   "description": "Troca o valor de uma credencial (vira versão nova): popup mascarado ou generate=true. Nenhum valor passa por mim.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "ref": {
+      "type": "string",
+      "description": "caminho da credencial, ex.: 'mcp/zabbix/ZABBIX_PASS'"
+     },
+     "generate": {
+      "type": "boolean"
+     },
+     "length": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "ref"
+    ]
+   }
+  },
+  {
+   "name": "archive",
+   "description": "Arquiva uma credencial (nada se apaga; deixa de ser entregue). 'restore' desfaz.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "ref": {
+      "type": "string",
+      "description": "caminho da credencial, ex.: 'mcp/zabbix/ZABBIX_PASS'"
+     }
+    },
+    "required": [
+     "ref"
+    ]
+   }
+  },
+  {
+   "name": "restore",
+   "description": "Restaura uma credencial arquivada.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "ref": {
+      "type": "string",
+      "description": "caminho da credencial, ex.: 'mcp/zabbix/ZABBIX_PASS'"
+     }
+    },
+    "required": [
+     "ref"
+    ]
+   }
+  },
+  {
+   "name": "move",
+   "description": "Muda o caminho (grupo e/ou nome) de uma credencial.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "ref": {
+      "type": "string",
+      "description": "caminho da credencial, ex.: 'mcp/zabbix/ZABBIX_PASS'"
+     },
+     "new_path": {
+      "type": "string",
+      "description": "novo grupo/NOME"
+     }
+    },
+    "required": [
+     "ref",
+     "new_path"
+    ]
+   }
+  },
+  {
+   "name": "import_env",
+   "description": "Lê um .env local e grava cada variável secreta (nome com KEY, PASS, SECRET…) como credencial 'grupo/NOME'. O broker lê o arquivo: eu só vejo os nomes. Não altera o .env nem sobrescreve. Pede confirmação.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "path": {
+      "type": "string",
+      "description": "caminho do .env"
+     },
+     "group": {
+      "type": "string",
+      "description": "grupo no cofre, ex.: 'mcp/zabbix'"
+     },
+     "names": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "só estas variáveis (padrão: as de nome secreto)"
+     }
+    },
+    "required": [
+     "path",
+     "group"
+    ]
+   }
+  },
+  {
+   "name": "inject",
+   "description": "Digita o valor no campo em FOCO, sem me devolver. Um popup pede o código do app autenticador sempre (o usuário põe o cursor no campo e digita o código); terminal e Claude são recusados. Se falhar, use 'copy'.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "ref": {
+      "type": "string",
+      "description": "caminho da credencial, ex.: 'mcp/zabbix/ZABBIX_PASS'"
+     }
+    },
+    "required": [
+     "ref"
+    ]
+   }
+  },
+  {
+   "name": "copy",
+   "description": "Copia o valor para a área de transferência por alguns segundos (limpa depois). Não me devolve o valor. O usuário autoriza num popup (o código ou a caixa de OK). Nunca leia a área de transferência depois.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "ref": {
+      "type": "string",
+      "description": "caminho da credencial, ex.: 'mcp/zabbix/ZABBIX_PASS'"
+     }
+    },
+    "required": [
+     "ref"
+    ]
+   }
+  },
+  {
+   "name": "run",
+   "description": "Roda um comando (lista de argumentos, sem shell; o programa pelo nome, achado no PATH, sem pasta) com credenciais no ambiente (um grupo ou caminhos; a variável é o NOME). Devolve o código de saída e a saída com os valores mascarados (••••). Programa novo para a credencial, a política 'sempre' e intérprete/shell mostram ao usuário uma caixa (ou o código) com o programa e os argumentos.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "command": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "programa (só o nome, do PATH) e argumentos, ex.: ['gh', 'api', 'user']"
+     },
+     "group": {
+      "type": "string",
+      "description": "todas as entradas diretas do grupo"
+     },
+     "paths": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "caminhos das credenciais"
+     },
+     "timeout": {
+      "type": "integer",
+      "description": "segundos (padrão 120, máx. 600)"
+     },
+     "cwd": {
+      "type": "string",
+      "description": "pasta de trabalho (padrão: a do projeto)"
+     }
+    },
+    "required": [
+     "command"
+    ]
+   }
+  },
+  {
+   "name": "ssh_list",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "description": "Servidores SSH do cofre neste cérebro (credenciais do tipo 'ssh'): usuário@host:porta, salto, se a chave do host está fixada e a regra. Sem segredos."
+  },
+  {
+   "name": "ssh_run",
+   "description": "Roda um comando num servidor do cofre. A senha ou a chave (e as dos saltos) vão direto ao ssh, sem passar por mim; a chave do host é conferida antes e host sem impressão fixada não recebe segredo (o erro mostra a impressão para gravar). Host com regra 'routeros-leitura' só aceita `/menu print|export` com palavras simples.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "server",
+     "command"
+    ],
+    "properties": {
+     "server": {
+      "type": "string",
+      "description": "caminho da credencial ssh"
+     },
+     "command": {
+      "type": "string",
+      "description": "comando remoto"
+     },
+     "stdin": {
+      "type": "string",
+      "description": "entrada do comando (opcional)"
+     },
+     "timeout": {
+      "type": "integer",
+      "description": "segundos (padrão 60, máx. 600)"
+     }
+    }
+   }
+  },
+  {
+   "name": "ssh_run_script",
+   "description": "Roda um script (várias linhas) num servidor do cofre, mandado pelo stdin do shell remoto. Recusado em host só de leitura.",
+   "inputSchema": {
+    "type": "object",
+    "required": [
+     "server",
+     "script"
+    ],
+    "properties": {
+     "server": {
+      "type": "string",
+      "description": "caminho da credencial ssh"
+     },
+     "script": {
+      "type": "string",
+      "description": "o script"
+     },
+     "shell": {
+      "type": "string",
+      "description": "shell remoto (padrão sh)"
+     },
+     "timeout": {
+      "type": "integer",
+      "description": "segundos (padrão 120, máx. 600)"
+     }
+    }
+   }
+  },
+  {
+   "name": "pair",
+   "description": "Vincula este aparelho ao cofre: pede um código, mostra-o na tela do usuário (popup) com as impressões das chaves, abre o portal para ele aprovar (logado, com MFA) e espera. O código não volta para mim.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "nome do aparelho, ex.: 'Mac do Augusto'"
+     },
+     "wait": {
+      "type": "integer",
+      "description": "segundos esperando (padrão 300, máx. 600)"
+     },
+     "force": {
+      "type": "boolean",
+      "description": "vincular de novo um aparelho já vinculado"
+     }
+    }
+   }
+  },
+  {
+   "name": "setup",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "description": "Configura o cofre na 1ª vez, só por popups: a pessoa cria a senha do cofre (duas vezes), vê o kit de recuperação uma vez e digita o código do autenticador. Você não recebe nada disso."
+  },
+  {
+   "name": "approvals",
+   "inputSchema": {
+    "type": "object",
+    "properties": {}
+   },
+   "description": "O que espera a aprovação do dono (compartilhamentos e chaves de time para membros novos), sem segredo. Aprovar é na caixa que aparece depois do destrave."
+  }
+ ]
+}
